@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep ZundamonJarvis echo-cancel output on the right device
+After=pipewire.service wireplumber.service pipewire-pulse.service
+PartOf=pipewire.service
+
+[Service]
+ExecStart=%h/.local/share/zundamon-jarvis/audio/aec-follow.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

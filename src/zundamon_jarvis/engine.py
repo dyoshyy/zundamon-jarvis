@@ -1,0 +1,163 @@
+"""Pinned, checksummed install of the VOICEVOX engine (Linux NVIDIA / macOS arm64)."""
+
+import hashlib
+import os
+import shutil
+import subprocess
+import tempfile
+import urllib.request
+from collections.abc import Callable, Sequence
+from pathlib import Path
+
+from zundamon_jarvis import platform
+
+_BASE = "https://github.com/VOICEVOX/voicevox_engine/releases/download/0.26.0"
+
+# Pinned from https://github.com/VOICEVOX/voicevox_engine/releases/tag/0.26.0 — each (url, sha256)
+# is the asset's `digest` as published by GitHub. Multi-part archives list every part in order.
+ENGINE: dict = {
+    "version": "0.26.0",
+    "mac": (
+        (
+            f"{_BASE}/voicevox_engine-macos-arm64-0.26.0.7z.001",
+            "76e445f13e142d05a0fdb6a9aeb8935589a0e40654d24185c338739e711f5d8f",
+        ),
+    ),
+    "linux": (
+        (
+            f"{_BASE}/voicevox_engine-linux-nvidia-0.26.0.7z.001",
+            "90b34eb13500679ac963766e172465f30eea12a0a7973dfd969c39595367b082",
+        ),
+        (
+            f"{_BASE}/voicevox_engine-linux-nvidia-0.26.0.7z.002",
+            "cf8e0ed723b3bffc15be5f6324e6198b27a1c5b1550601c3e7a5471a55d84dd8",
+        ),
+    ),
+    "linux-cpu": (
+        (
+            f"{_BASE}/voicevox_engine-linux-cpu-x64-0.26.0.7z.001",
+            "3a74cf1bdef6b415f2acf7501f50b43e8d1ebcff85b923f693a7c4a60734d943",
+        ),
+    ),
+}
+
+MARKER = ".zundamon-engine-version"
+
+
+class ChecksumError(RuntimeError):
+    pass
+
+
+def default_dest(system: str) -> Path:
+    return platform.data_dir(system) / "voicevox_engine"
+
+
+def tar_command(system: str) -> str:
+    return "/usr/bin/tar" if system == "mac" else "bsdtar"
+
+
+def fetch_url(url: str, dest: Path) -> None:
+    with urllib.request.urlopen(url, timeout=60) as r, open(dest, "wb") as f:  # noqa: S310 - pinned https URLs
+        shutil.copyfileobj(r, f, 1 << 20)
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def extract_archive(parts: Sequence[Path], into: Path, tar: str) -> None:
+    """Concatenate the verified parts into one .7z (libarchive's 7z reader needs random access,
+    so it cannot be streamed), extract it, then delete it."""
+    joined = Path(into).parent / "engine.7z"
+    try:
+        with open(joined, "wb") as out:
+            for part in parts:
+                with open(part, "rb") as f:
+                    shutil.copyfileobj(f, out, 1 << 20)
+                Path(part).unlink()  # keep peak disk use near one copy
+        subprocess.run([tar, "-xf", str(joined), "-C", str(into)], check=True)
+    finally:
+        joined.unlink(missing_ok=True)
+
+
+def check_runs(run: Path) -> None:
+    # The engine's argparse has no --version; --help exits 0 once the binary and its libs load.
+    subprocess.run([str(run), "--help"], check=True, capture_output=True, timeout=120)
+
+
+def _installed(dest: Path) -> bool:
+    run = dest / "run"
+    if not (run.is_file() and os.access(run, os.X_OK)):
+        return False
+    marker = dest / MARKER
+    # An install made before pinning has no marker: keep it rather than re-download ~3 GB.
+    return not marker.exists() or marker.read_text().strip() == ENGINE["version"]
+
+
+def _swap_in(new: Path, dest: Path, tmp: Path) -> None:
+    """Replace dest with new; the old install is kept aside and restored if the move fails."""
+    old = tmp / "old"
+    had = dest.exists() or dest.is_symlink()
+    if had:
+        os.replace(dest, old)  # renames the link itself when dest is a symlink
+    try:
+        os.replace(new, dest)
+    except BaseException:
+        if had:
+            os.replace(old, dest)
+        raise
+    if had:
+        if old.is_symlink():
+            old.unlink()
+        else:
+            shutil.rmtree(old, ignore_errors=True)
+
+
+def install_engine(
+    system: str,
+    dest: Path | None = None,
+    flavor: str | None = None,
+    fetch: Callable[[str, Path], None] = fetch_url,
+    extract: Callable[[Sequence[Path], Path, str], None] = extract_archive,
+    check: Callable[[Path], None] = check_runs,
+) -> Path:
+    dest = Path(dest) if dest else default_dest(system)
+    if _installed(dest):
+        print(f"VOICEVOX engine {ENGINE['version']} already installed: {dest}")
+        return dest
+    if flavor == "linux-cpu" and system != "linux":
+        raise ValueError("--cpu is only available on Linux")
+    parts_spec = ENGINE[flavor or system]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix=".engine-dl.", dir=dest.parent))
+    try:
+        files: list[Path] = []
+        for url, want in parts_spec:
+            f = tmp / url.rsplit("/", 1)[1]
+            fetch(url, f)
+            got = sha256_file(f)
+            if got != want:
+                f.unlink(missing_ok=True)
+                raise ChecksumError(f"SHA-256 mismatch for {url}: expected {want}, got {got}")
+            files.append(f)
+        out = tmp / "out"
+        out.mkdir()
+        extract(files, out, tar_command(system))
+        # extract_archive owns part cleanup (parts may already be gone)
+        for f in files:
+            f.unlink(missing_ok=True)
+        tops = [p for p in out.iterdir()]
+        root = tops[0] if len(tops) == 1 and tops[0].is_dir() else out
+        if not (root / "run").is_file():
+            raise RuntimeError("extracted archive has no `run` executable")
+        check(root / "run")
+        (root / MARKER).write_text(ENGINE["version"])
+        _swap_in(root, dest, tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print(f"VOICEVOX engine {ENGINE['version']} installed: {dest}")
+    return dest

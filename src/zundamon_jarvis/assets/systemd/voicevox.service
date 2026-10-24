@@ -1,0 +1,9 @@
+[Unit]
+Description=VOICEVOX engine (ZundamonJarvis TTS)
+
+[Service]
+ExecStart=%h/.local/share/zundamon-jarvis/voicevox_engine/run --host 127.0.0.1 --port 50021 --use_gpu
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

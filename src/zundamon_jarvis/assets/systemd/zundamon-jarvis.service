@@ -1,0 +1,28 @@
+[Unit]
+Description=ZundamonJarvis voice partner (always listening; zundamon-jarvisctl toggle pauses)
+After=voicevox.service pipewire.service pipewire-pulse.service
+Wants=voicevox.service
+# A crash loop (e.g. Whisper/CUDA failing at startup) gives up after 5 starts in 5 min
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/repos/zundamon-jarvis
+ExecStart=%h/repos/zundamon-jarvis/.venv/bin/zundamon-jarvis daemon
+# claude (mise shim) and uv-installed tools; the user manager may not have the login PATH yet
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin
+Environment=PYTHONUNBUFFERED=1
+# The Whisper model is cached; don't need the network (it may not be up yet at login)
+Environment=HF_HUB_OFFLINE=1
+# Never bill the API: the claude CLI must use the subscription login
+UnsetEnvironment=ANTHROPIC_API_KEY
+Restart=on-failure
+RestartSec=5
+# 3 = another zundamon-jarvis daemon already holds the control socket: restarting won't help
+RestartPreventExitStatus=3
+# aclose() waits for the Claude CLI to disconnect (SessionEnd capture hook)
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
