@@ -73,10 +73,10 @@ def ev(kind, **fields):
 
 
 @pytest.mark.parametrize("event, line", [
-    (ev("heard", text="明日の予定は？"), "09:05 You ▸ 明日の予定は？"),
-    (ev("said", text="明日はジムだよ。", what="reply"), "09:05 ZundamonJarvis ▸ 明日はジムだよ。"),
-    (ev("said", text="ちょっと待ってね", what="filler"), "09:05 ZundamonJarvis ▸ (ちょっと待ってね)"),
-    (ev("said", text="上限に達したから黙るね", what="notice"), "09:05 ZundamonJarvis ▸ 上限に達したから黙るね"),
+    (ev("heard", text="明日の予定は？"), "09:05 You ▸\n  明日の予定は？"),
+    (ev("said", text="明日はジムだよ。", what="reply"), "09:05 ZundamonJarvis ▸\n  明日はジムだよ。"),
+    (ev("said", text="ちょっと待ってね", what="filler"), "09:05 ZundamonJarvis ▸\n  (ちょっと待ってね)"),
+    (ev("said", text="上限に達したから黙るね", what="notice"), "09:05 ZundamonJarvis ▸\n  上限に達したから黙るね"),
     (ev("said", text="予定を入れるけど、いい？", what="question"), "09:05 ❓ Confirm: 予定を入れるけど、いい？"),
     (ev("confirm", question="q", ok=True, why="answer"), "09:05 ✅ Yes → go"),
     (ev("confirm", question="q", ok=False, why="answer"), "09:05 ❌ No → cancelled"),
@@ -98,8 +98,8 @@ def test_format_event(event, line):
 
 def test_format_unknown_or_broken_events_is_safe():
     assert ctl.format_event(ev("mystery"), color=False) is None
-    assert ctl.format_event({"kind": "heard"}, color=False) == "--:-- You ▸ "
-    assert ctl.format_event({"kind": "heard", "ts": "garbage", "text": "x"}, color=False) == "--:-- You ▸ x"
+    assert ctl.format_event({"kind": "heard"}, color=False) == "--:-- You ▸\n  "
+    assert ctl.format_event({"kind": "heard", "ts": "garbage", "text": "x"}, color=False) == "--:-- You ▸\n  x"
 
 
 def test_color_wraps_lines_and_resets():
@@ -112,12 +112,12 @@ def test_view_skips_what_it_has_already_shown_after_a_reconnect():
     first = [{"kind": "hello", "boot": "b1"}, {**ev("heard", text="a"), "id": 1},
              {"kind": "live"}, {**ev("heard", text="b"), "id": 2}]
     out = [line for e in first for line in view.feed(e)]
-    assert out == ["09:05 You ▸ a", ctl.LIVE_LINE, "09:05 You ▸ b"]
+    assert out == ["09:05 You ▸\n  a", ctl.LIVE_LINE, "09:05 You ▸\n  b"]
     assert view.disconnected() == ctl.WAITING_LINE
     assert view.disconnected() is None  # said once while waiting
     again = [{"kind": "hello", "boot": "b1"}, {**ev("heard", text="a"), "id": 1},
              {**ev("heard", text="b"), "id": 2}, {"kind": "live"}, {**ev("heard", text="c"), "id": 3}]
-    assert [line for e in again for line in view.feed(e)] == ["09:05 You ▸ c"]
+    assert [line for e in again for line in view.feed(e)] == ["09:05 You ▸\n  c"]
 
 
 def test_view_shows_everything_again_after_a_daemon_restart():
@@ -127,7 +127,7 @@ def test_view_shows_everything_again_after_a_daemon_restart():
     view.disconnected()
     lines = [line for e in [{"kind": "hello", "boot": "b2"}, {**ev("heard", text="new"), "id": 1},
                             {"kind": "live"}] for line in view.feed(e)]
-    assert lines == [ctl.RESTART_LINE, "09:05 You ▸ new", ctl.LIVE_LINE]
+    assert lines == [ctl.RESTART_LINE, "09:05 You ▸\n  new", ctl.LIVE_LINE]
 
 
 async def test_watch_prints_history_then_live_and_waits_when_the_daemon_goes(tmp_path):
@@ -162,9 +162,10 @@ async def test_watch_prints_history_then_live_and_waits_when_the_daemon_goes(tmp
     await server.wait_closed()
     assert await asyncio.to_thread(done.wait, 2)
     lines = out.getvalue().splitlines()
-    assert [line[6:] for line in lines[:1]] == ["You ▸ 前の話"]
-    assert lines[1:] == [ctl.LIVE_LINE, lines[2], lines[3], ctl.WAITING_LINE]
-    assert lines[2].endswith("  📅 Check calendar") and lines[3].endswith("ZundamonJarvis ▸ 明日はジムだよ。")
+    assert lines[0][6:] == "You ▸" and lines[1] == "  前の話"
+    assert lines[2:] == [ctl.LIVE_LINE, lines[3], lines[4], lines[5], ctl.WAITING_LINE]
+    assert lines[3].endswith("  📅 Check calendar") and lines[4].endswith("ZundamonJarvis ▸")
+    assert lines[5] == "  明日はジムだよ。"
     assert result["code"] == 0 and sleeps == [ctl.RETRY_S]
 
 
@@ -271,7 +272,7 @@ def test_view_is_busy_only_live_and_until_the_next_event():
     assert not view.busy  # still replaying history
     assert view.feed({"kind": "live"}) == [ctl.LIVE_LINE]
     assert view.busy
-    assert view.feed({**ev("said", text="やあ", what="reply"), "id": 2}) == ["09:05 ZundamonJarvis ▸ やあ"]
+    assert view.feed({**ev("said", text="やあ", what="reply"), "id": 2}) == ["09:05 ZundamonJarvis ▸\n  やあ"]
     assert not view.busy
     view.feed({**ev("thinking", on=True), "id": 3})
     assert view.busy
@@ -300,3 +301,22 @@ def test_loader_draws_a_spinner_while_busy_and_scrolls_lines_above_it():
     view.feed({**ev("heard", text="x"), "id": 2})
     loader.tick()
     assert out.getvalue() == ""
+
+
+def test_view_leaves_out_time_and_name_while_the_same_speaker_keeps_talking():
+    view = ctl.WatchView(color=False)
+    events = [ev("heard", text="a"), ev("heard", text="b"),
+              ev("said", text="c", what="filler"), ev("said", text="d", what="reply"),
+              ev("heard", text="e")]
+    out = [line for i, e in enumerate(events, 1) for line in view.feed({**e, "id": i})]
+    assert out == ["09:05 You ▸\n  a", "  b",
+                   "09:05 ZundamonJarvis ▸\n  (c)", "  d",
+                   "09:05 You ▸\n  e"]
+
+
+def test_view_names_the_speaker_again_after_another_kind_of_line():
+    view = ctl.WatchView(color=False)
+    events = [ev("heard", text="a"), ev("tool", label="📅 Check calendar", sub=False),
+              ev("heard", text="b")]
+    out = [line for i, e in enumerate(events, 1) for line in view.feed({**e, "id": i})]
+    assert out[2] == "09:05 You ▸\n  b"

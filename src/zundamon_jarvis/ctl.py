@@ -102,14 +102,14 @@ def _body(ev: dict) -> tuple[str, str] | None:
     kind = ev.get("kind")
     text = str(ev.get("text", ""))
     if kind == "heard":
-        return "heard", f"You ▸ {text}"
+        return "heard", f"You ▸\n  {text}"
     if kind == "said":
         what = ev.get("what")
         if what == "question":
             return "warn", f"❓ Confirm: {text}"
         if what == "filler":
-            return "dim", f"ZundamonJarvis ▸ ({text})"
-        return ("warn" if what == "notice" else "reply"), f"ZundamonJarvis ▸ {text}"
+            return "dim", f"ZundamonJarvis ▸\n  ({text})"
+        return ("warn" if what == "notice" else "reply"), f"ZundamonJarvis ▸\n  {text}"
     if kind == "confirm":
         ok = bool(ev.get("ok"))
         return _CONFIRM.get((ok, ev.get("why")), ("ok", "✅ Yes → go") if ok else ("no", "❌ Cancelled"))
@@ -126,12 +126,27 @@ def _body(ev: dict) -> tuple[str, str] | None:
     return None
 
 
-def format_event(ev: dict, color: bool = False) -> str | None:
+def speaker_of(ev: dict) -> str | None:
+    """Who is talking in this event ("You" / "ZundamonJarvis"), or None for everything else."""
+    kind = ev.get("kind")
+    if kind == "heard":
+        return "You"
+    if kind == "said" and ev.get("what") != "question":
+        return "ZundamonJarvis"
+    return None
+
+
+def format_event(ev: dict, color: bool = False, same_speaker: bool = False) -> str | None:
+    """One event as printable text. ``same_speaker``: the previous line was the same speaker,
+    so the time and name are left out and only the indented message is printed."""
     body = _body(ev)
     if body is None:
         return None
     style, text = body
-    line = f"{_hhmm(ev.get('ts'))} {text}"
+    if same_speaker and speaker_of(ev) is not None:
+        line = text.split("\n", 1)[-1]
+    else:
+        line = f"{_hhmm(ev.get('ts'))} {text}"
     return f"{_STYLE[style]}{line}{_RESET}" if color else line
 
 
@@ -145,6 +160,7 @@ class WatchView:
         self._live_shown = False
         self._waiting = False
         self._thinking = False
+        self._speaker: str | None = None  # who spoke on the last printed line
 
     @property
     def busy(self) -> bool:
@@ -166,11 +182,13 @@ class WatchView:
                 self._last_id = 0
                 self._live_shown = False
             self._boot = boot
+            self._speaker = None
             return lines
         if kind == "live":
             if self._live_shown:
                 return []
             self._live_shown = True
+            self._speaker = None
             return [self._dim(LIVE_LINE)]
         ev_id = ev.get("id")
         if isinstance(ev_id, int):
@@ -181,11 +199,16 @@ class WatchView:
             self._thinking = bool(ev.get("on"))
             return []
         self._thinking = False  # any other event means the turn moved on
-        line = format_event(ev, self.color)
-        return [line] if line is not None else []
+        speaker = speaker_of(ev)
+        line = format_event(ev, self.color, same_speaker=speaker is not None and speaker == self._speaker)
+        if line is None:
+            return []
+        self._speaker = speaker
+        return [line]
 
     def disconnected(self) -> str | None:
         self._thinking = False
+        self._speaker = None
         if self._waiting:
             return None
         self._waiting = True
