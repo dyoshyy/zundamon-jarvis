@@ -33,7 +33,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gdk, GLib, Gtk, Pango, PangoCairo  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
 try:
     gi.require_version("Gtk4LayerShell", "1.0")
@@ -47,6 +47,7 @@ from zundamon_jarvis.character import (  # noqa: E402
     Pose,
     Prefs,
     clamp_margins,
+    drag_target,
     is_click,
     load_prefs,
     normalize,
@@ -308,6 +309,26 @@ def draw_bubble(cr: cairo.Context, line: Line) -> None:
     PangoCairo.show_layout(cr, layout)
 
 
+def hypr_cursor() -> tuple[float, float] | None:
+    """The pointer in screen coordinates from Hyprland's IPC socket, or None elsewhere."""
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if not sig:
+        return None
+    run_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(0.2)
+            s.connect(f"{run_dir}/hypr/{sig}/.socket.sock")
+            s.sendall(b"j/cursorpos")
+            data = b""
+            while chunk := s.recv(4096):
+                data += chunk
+        pos = json.loads(data)
+        return float(pos["x"]), float(pos["y"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def open_watch_window() -> None:
     """``zundamon-jarvisctl window watch`` (it toggles), without our GTK preload / PYTHONPATH."""
     ctl = os.environ.get("ZUNDAMON_JARVISCTL") or "zundamon-jarvisctl"
@@ -408,16 +429,21 @@ def build_window(app: Gtk.Application, forced_state: str | None = None) -> Gtk.W
     place(prefs.right, prefs.bottom)
     win.connect("map", lambda _w: place(prefs.right, prefs.bottom))  # clamp once the monitor is known
 
-    # drag = move, click = watch window. The offsets are relative to the widget, which moves
-    # with the window: the pointer's total movement is the offset plus how far it has moved.
+    # drag = move, click = watch window. On Hyprland the pointer is read in screen coordinates
+    # (``drag_target``). Elsewhere the gesture's offsets, which are relative to the moving
+    # window: the pointer's movement is the offset plus how far the window has moved (this
+    # lags behind the compositor, so it wobbles a little).
     drag = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY)
-    moving = {"start": (0, 0), "moved": (0, 0), "dragged": False}
+    moving = {"start": (0, 0), "pointer": None, "moved": (0, 0), "dragged": False}
 
     def total(ox: float, oy: float) -> tuple[float, float]:
+        if moving["pointer"] is not None and (now := hypr_cursor()) is not None:
+            return now[0] - moving["pointer"][0], now[1] - moving["pointer"][1]
         return ox + moving["moved"][0], oy + moving["moved"][1]
 
     def on_begin(_g, _x, _y) -> None:
-        moving.update(start=(prefs.right, prefs.bottom), moved=(0, 0), dragged=False)
+        moving.update(start=(prefs.right, prefs.bottom), pointer=hypr_cursor(), moved=(0, 0),
+                      dragged=False)
 
     def on_update(_g, ox: float, oy: float) -> None:
         dx, dy = total(ox, oy)
@@ -427,7 +453,7 @@ def build_window(app: Gtk.Application, forced_state: str | None = None) -> Gtk.W
             moving["dragged"] = True
             area.set_cursor(Gdk.Cursor.new_from_name("grabbing"))
         r0, b0 = moving["start"]
-        r, b = place(r0 - dx, b0 - dy)
+        r, b = place(*drag_target((r0, b0), (0.0, 0.0), (dx, dy)))
         moving["moved"] = (r0 - r, b0 - b)
 
     def on_end(_g, ox: float, oy: float) -> None:
@@ -463,8 +489,15 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     # preview a state (or "hearing": listening with the hearing cue)
     forced = args[0] if args and (normalize(args[0]) == args[0] or args[0] == "hearing") else None
-    app = Gtk.Application(application_id=APP_ID)
-    app.connect("activate", lambda a: build_window(a, forced).present())
+    # One character: launching it again (the app launcher) just brings it back to the front.
+    # A preview is its own instance, next to a running character.
+    app = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE
+                          if forced else Gio.ApplicationFlags.DEFAULT_FLAGS)
+
+    def activate(a: Gtk.Application) -> None:
+        (a.get_windows() or [build_window(a, forced)])[0].present()
+
+    app.connect("activate", activate)
     return app.run([])
 
 

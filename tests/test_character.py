@@ -13,6 +13,7 @@ from zundamon_jarvis.character import (
     Line,
     Prefs,
     clamp_margins,
+    drag_target,
     is_click,
     load_prefs,
     normalize,
@@ -187,3 +188,9 @@ def test_prefs_round_trip_and_survive_junk(tmp_path):
     assert load_prefs(path) == Prefs()
     path.write_text('{"right": "x", "bottom": -5, "bubble": "yes", "extra": 1}')
     assert load_prefs(path) == Prefs(bottom=0)
+
+
+def test_dragging_follows_the_pointer_on_the_screen():
+    # pointer moved 30 right, 10 down: the right / bottom margins shrink by as much
+    assert drag_target((100, 200), (500.0, 400.0), (530.0, 410.0)) == (70.0, 190.0)
+    assert drag_target((100, 200), (500.0, 400.0), (500.0, 400.0)) == (100.0, 200.0)

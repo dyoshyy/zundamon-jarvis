@@ -177,6 +177,14 @@ def is_click(dx: float, dy: float) -> bool:
     return abs(dx) <= CLICK_SLOP_PX and abs(dy) <= CLICK_SLOP_PX
 
 
+def drag_target(start: tuple[int, int], pointer_start: tuple[float, float],
+                pointer: tuple[float, float]) -> tuple[float, float]:
+    """Right / bottom margins after the pointer (in screen coordinates) moved since the press.
+    Screen coordinates, not the window's own: the window moves under the pointer while it is
+    dragged, so offsets relative to it lag behind the compositor and make it jump about."""
+    return (start[0] - (pointer[0] - pointer_start[0]), start[1] - (pointer[1] - pointer_start[1]))
+
+
 def clamp_margins(right: float, bottom: float, size: tuple[int, int],
                   screen: tuple[int, int]) -> tuple[int, int]:
     """Margins from the bottom-right corner that keep a ``size`` window on a ``screen``."""

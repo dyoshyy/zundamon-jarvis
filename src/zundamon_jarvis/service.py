@@ -1,4 +1,9 @@
-"""Always-on services: launchd agents on macOS, systemd user units on Linux."""
+"""Always-on services: launchd agents on macOS, systemd user units on Linux.
+
+On Linux the on-screen character (``zundamon-jarvisctl character``) also goes into the app
+launcher: a desktop entry plus its icon, rewritten on every install (the path to
+``zundamon-jarvisctl`` may have changed).
+"""
 
 import os
 import plistlib
@@ -17,6 +22,8 @@ LABELS = {
     "menubar": "dev.zundamon-jarvis.menubar",
 }
 UNITS = ("voicevox.service", "zundamon-jarvis.service")
+DESKTOP_ENTRY = Path(".local/share/applications/zundamon-jarvis.desktop")  # under home
+ICON = Path(".local/share/icons/hicolor/256x256/apps/zundamon-jarvis.png")
 
 
 def _base_path(home: Path) -> list[str]:
@@ -60,6 +67,37 @@ def _find_exe() -> str:
     return str(Path(found).absolute())
 
 
+def _find_ctl() -> str:
+    sibling = Path(sys.executable).parent / "zundamon-jarvisctl"
+    if sibling.exists():
+        return str(sibling)
+    found = shutil.which("zundamon-jarvisctl")
+    return str(Path(found).absolute()) if found else "zundamon-jarvisctl"
+
+
+def desktop_entry(ctl: str) -> str:
+    return "\n".join([
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=ZundamonJarvis",
+        "Comment=The voice partner on your screen (click: conversation, right-click: speech bubble)",
+        f"Exec={ctl} character",
+        "Icon=zundamon-jarvis",
+        "Terminal=false",
+        "Categories=Utility;",
+        "Keywords=jarvis;zundamon;voice;assistant;",
+        "",
+    ])
+
+
+def _install_launcher(home: Path, ctl: str | None) -> None:
+    entry, icon = home / DESKTOP_ENTRY, home / ICON
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    icon.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(Path(str(resources.files("zundamon_jarvis") / "assets" / "icon.png")), icon)
+    entry.write_text(desktop_entry(ctl or _find_ctl()))
+
+
 def _agents(exe: str, home: Path) -> dict[str, list[str]]:
     engine_run = str(home / "Library" / "Application Support" / platform.APP / "voicevox_engine" / "run")
     return {
@@ -81,11 +119,13 @@ def install_services(
     exe: str | None = None,
     claude: str | None = None,
     unit_src: Path | None = None,
+    ctl: str | None = None,
 ) -> None:
     home = Path(home) if home else Path.home()
     if system == "mac":
         _install_mac(run, home, os.getuid() if uid is None else uid, exe, claude)
     else:
+        _install_launcher(home, ctl)
         _install_linux(run, home, unit_src)
 
 
@@ -124,6 +164,8 @@ def uninstall_services(
         for n in UNITS:
             (home / ".config" / "systemd" / "user" / n).unlink(missing_ok=True)
         run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        (home / DESKTOP_ENTRY).unlink(missing_ok=True)
+        (home / ICON).unlink(missing_ok=True)
 
 
 def _install_linux(run, home: Path, unit_src: Path | None) -> None:
