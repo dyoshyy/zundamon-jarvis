@@ -29,6 +29,8 @@ the current run of all-zero frames (`zero_frames_streak_s`; 5 s reopens the mic)
 in memory only), then ``{"kind": "live"}``, then every new event as it happens. Events carry
 ``id`` (counts up from 1 per daemon run), ``ts`` (local ISO time) and ``kind``. A watcher that
 falls ``queue_max`` events behind is disconnected: publishing never waits for anyone.
+``publish_live`` events (``hearing``) only go to the watchers connected now: they say what
+is happening this instant, so they are never replayed as history.
 """
 
 import asyncio
@@ -180,6 +182,13 @@ class WatchHub:
 
     def publish(self, kind: str, **fields: Any) -> dict | None:
         """Record an event and queue it for every watcher. Never blocks, never raises."""
+        return self._publish(kind, fields, keep=True)
+
+    def publish_live(self, kind: str, **fields: Any) -> dict | None:
+        """Like ``publish``, but left out of the history."""
+        return self._publish(kind, fields, keep=False)
+
+    def _publish(self, kind: str, fields: dict[str, Any], keep: bool) -> dict | None:
         try:
             ev = {"id": self._seq + 1, "ts": self._now().isoformat(timespec="seconds"),
                   "kind": kind, **fields}
@@ -188,7 +197,8 @@ class WatchHub:
             log.exception("watch event dropped (%s)", kind)
             return None
         self._seq += 1
-        self._history.append(data)
+        if keep:
+            self._history.append(data)
         for w in list(self._watchers):
             try:
                 w.queue.put_nowait(data)

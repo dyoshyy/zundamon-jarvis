@@ -28,7 +28,9 @@ Mic (AudioIn) -> SileroVad -> Endpointer -> Orchestrator, plus the control socke
   fresh audio stack; if the clean shutdown hangs too, exit hard after HARD_EXIT_S
   (``AudioGuard``).
 - Watch: heard transcripts, what is said, tool uses, confirmations and state changes go to
-  the control socket's ``WatchHub`` (``zundamon-jarvisctl watch``) through ``activity.ActivityFeed``.
+  the control socket's ``WatchHub`` (``zundamon-jarvisctl watch``) through ``activity.ActivityFeed``;
+  so does ``hearing`` (``hearing_observers``): on at SpeechStarted, off when the utterance ends
+  or the ears stop taking frames (muted, paused, reset), for the character's "I hear you".
 - Settings (``live_settings.LiveSettings`` on the control socket: ``get`` / ``set`` / ``preview``
   / ``newsession``): speed and voice change the live Voicevox, the model the next brain;
   a preview plays on its own player with the mic ignored meanwhile (``set_ears_muted``).
@@ -103,6 +105,7 @@ class Daemon:
         start_paused: bool = False,
         services: Iterable[Callable[[], Awaitable[None]]] = (),
         state_observers: Iterable[Callable[[str], None]] = (),
+        hearing_observers: Iterable[Callable[[bool], None]] = (),
         mic_retry_s: float = MIC_RETRY_S,
         mic_stall_s: float = MIC_STALL_S,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -117,6 +120,8 @@ class Daemon:
         self._start_paused = start_paused
         self._services = list(services)
         self._state_observers = list(state_observers)
+        self._hearing_observers = list(hearing_observers)
+        self._hearing = False  # the user's speech is being taken in (SpeechStarted..Utterance)
         self._mic_retry_s = mic_retry_s
         self._mic_stall_s = mic_stall_s
         self._sleep = sleep
@@ -200,6 +205,7 @@ class Daemon:
         self._audio.close()  # the listen loop's frames() ends; nothing more is read
         self._endpointer.reset()
         self._vad.reset()
+        self._set_hearing(False)
         await self._orch.pause()
         log.info("paused")
 
@@ -234,6 +240,8 @@ class Daemon:
             return
         self._deaf = muted
         log.info("ears %s (settings preview)", "muted" if muted else "unmuted")
+        if muted:
+            self._set_hearing(False)
         if not muted:
             self._reset_ears("deaf")
 
@@ -258,6 +266,7 @@ class Daemon:
         self._endpointer.reset()
         self._vad.reset()
         self._speech_since = None
+        self._set_hearing(False)
         if was:
             log.info("utterance dropped (%s): the ears were reset mid-utterance", why)
             try:
@@ -422,11 +431,13 @@ class Daemon:
 
     async def _process(self, frame: Any) -> None:
         if self._deaf or self._half_muted:
+            self._set_hearing(False)
             return
         prob = self._vad.prob(frame)
         self._probs.add(prob)
         for ev in self._endpointer.feed(frame, prob):
             if isinstance(ev, SpeechStarted):
+                self._set_hearing(True)
                 self._speech_since = self._clock()
                 self._warned_speech = False
                 self._rlog(logging.INFO, "speech", "speech started (vad %.2f)", prob)
@@ -435,6 +446,7 @@ class Daemon:
                 except Exception:
                     log.exception("orchestrator failed on speech start")
             elif isinstance(ev, Utterance):
+                self._set_hearing(False)
                 self._speech_since = None
                 seconds = len(ev.audio) / SAMPLE_RATE
                 if getattr(ev, "cut", False):
@@ -510,6 +522,16 @@ class Daemon:
                 observe(state)
             except Exception:
                 log.exception("state observer failed")
+
+    def _set_hearing(self, on: bool) -> None:
+        if on == self._hearing:
+            return
+        self._hearing = on
+        for observe in self._hearing_observers:
+            try:
+                observe(on)
+            except Exception:
+                log.exception("hearing observer failed")
 
     def _spawn(self, coro: Any) -> None:
         task = asyncio.create_task(coro)
@@ -690,7 +712,8 @@ async def _amain(start_paused: bool, sock: Path) -> int:
                            player.stop)
     clog = ConversationLog(directory)
     hub = control.WatchHub()
-    feed = ActivityFeed(hub.publish, offline_reasons=lambda: daemon.offline_reasons)
+    feed = ActivityFeed(hub.publish, offline_reasons=lambda: daemon.offline_reasons,
+                        publish_live=hub.publish_live)
 
     def on_heard(text: str) -> None:
         text = (text or "").strip()
@@ -722,7 +745,7 @@ async def _amain(start_paused: bool, sock: Path) -> int:
     daemon = Daemon(AudioIn(device=cfg.mic_device, system=system, on_stuck=guard),
                     SileroVad(), Endpointer(),
                     orch, clog, start_paused=start_paused, services=[watch.run],
-                    state_observers=[feed.state],
+                    state_observers=[feed.state], hearing_observers=[feed.hearing],
                     half_duplex=duplex_check(cfg.duplex, system))
     preview_player = Player(on_stuck=guard)  # its own stream: never clobbers the reply player
     live = LiveSettings(cfg, vv, watch, orch,

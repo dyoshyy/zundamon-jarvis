@@ -293,6 +293,47 @@ async def test_muted_ears_ignore_the_mic_then_start_fresh(parts):
     await task
 
 
+async def test_hearing_goes_on_at_speech_start_and_off_at_the_utterance(parts):
+    calls, audio, vad, ep, orch, log = parts
+    seen = []
+
+    def broken(on):
+        raise RuntimeError("watch broke")
+
+    d = make(parts, hearing_observers=[broken, seen.append])
+    task = await started(d)
+    audio.push(frame(0.9, [SpeechStarted()]))
+    audio.push(frame(0.9))  # still talking: no repeat
+    audio.push(frame(0.1, [Utterance(np.zeros(10, np.float32))]))
+    await settle()
+    assert seen == [True, False]
+    assert orch.started == 1  # a failing observer stops nothing
+    d.stop()
+    await task
+
+
+async def test_hearing_goes_off_when_the_ears_stop_mid_utterance(parts):
+    calls, audio, vad, ep, orch, log = parts
+    seen = []
+    d = make(parts, hearing_observers=[seen.append])
+    task = await started(d)
+    audio.push(frame(0.9, [SpeechStarted()]))
+    await settle()
+    d.set_ears_muted(True)  # a settings preview starts while the user talks
+    audio.push(frame(0.9))
+    await settle()
+    assert seen == [True, False]
+    audio.push(frame(0.9, [SpeechStarted()]))  # ignored while muted
+    await settle()
+    d.set_ears_muted(False)
+    audio.push(frame(0.9, [SpeechStarted()]))
+    await settle()
+    await d.pause()
+    assert seen == [True, False, True, False]
+    d.stop()
+    await task
+
+
 async def test_state_changes_go_to_the_log(parts):
     calls, audio, vad, ep, orch, log = parts
     d = make(parts)
