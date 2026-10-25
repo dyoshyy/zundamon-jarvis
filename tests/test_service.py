@@ -109,3 +109,28 @@ def test_packaged_unit_templates_exist():
 
     base = resources.files("zundamon_jarvis") / "assets" / "systemd"
     assert (base / "voicevox.service").is_file() and (base / "zundamon-jarvis.service").is_file()
+
+
+def test_linux_install_adds_the_character_to_the_app_launcher(tmp_path):
+    units = tmp_path / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    for n in ("voicevox.service", "zundamon-jarvis.service"):
+        (units / n).write_text("x")  # already installed: the launcher entry is still written
+    service.install_services("linux", run=Runner(), home=tmp_path, ctl="/opt/zj/bin/zundamon-jarvisctl")
+    entry = (tmp_path / ".local/share/applications/zundamon-jarvis.desktop").read_text()
+    assert "\nExec=/opt/zj/bin/zundamon-jarvisctl character\n" in entry
+    assert "\nIcon=zundamon-jarvis\n" in entry and "\nType=Application\n" in entry
+    icon = tmp_path / ".local/share/icons/hicolor/256x256/apps/zundamon-jarvis.png"
+    assert icon.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_linux_uninstall_removes_the_launcher_entry(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    for n in ("voicevox.service", "zundamon-jarvis.service"):
+        (src / n).write_text(n)
+    service.install_services("linux", run=Runner(), home=tmp_path, ctl="/x/zundamon-jarvisctl",
+                             unit_src=src)
+    service.uninstall_services("linux", run=Runner(), home=tmp_path)
+    assert not (tmp_path / ".local/share/applications/zundamon-jarvis.desktop").exists()
+    assert not (tmp_path / ".local/share/icons/hicolor/256x256/apps/zundamon-jarvis.png").exists()

@@ -259,6 +259,20 @@ def test_character_runs_the_overlay_under_the_system_python():
     assert env["PYTHONPATH"].endswith("src")
 
 
+def test_character_knows_which_zundamon_jarvisctl_opens_the_watch_window():
+    cmd, env = ctl.character_command()
+    assert env["ZUNDAMON_JARVISCTL"] == ctl._zundamon_jarvisctl()
+
+
+def test_hearing_events_are_not_shown_and_keep_the_spinner():
+    view = ctl.WatchView(color=False)
+    view.feed({"kind": "hello", "boot": "b1"})
+    view.feed({"kind": "live"})
+    view.feed({**ev("thinking", on=True), "id": 1})
+    assert view.feed({**ev("hearing", on=True), "id": 2}) == []
+    assert view.busy  # the user talking over a turn does not end it
+
+
 def test_debug_prints_the_diagnostics(monkeypatch, capsys):
     reply = {"state": "listening", "text": "Listening", "debug": {"ears_muted": False}}
     code, out, sent = run(monkeypatch, capsys, ["debug"], reply)

@@ -13,6 +13,8 @@ the control socket's ``WatchHub``:
 - ``thinking {on}``: the brain started / stopped working on a turn (the window shows a spinner,
   never a line)
 - ``task {status, summary}``: a background task ended
+- ``hearing {on}``: the user's speech is being taken in (the daemon's SpeechStarted until the
+  utterance ends); live only (``publish_live``), never in the history
 """
 
 import logging
@@ -34,17 +36,25 @@ class ActivityFeed:
         self,
         publish: Callable[..., Any],
         offline_reasons: Callable[[], Iterable[str]] = lambda: (),
+        publish_live: Callable[..., Any] | None = None,
     ) -> None:
         self._publish = publish
+        self._publish_live = publish if publish_live is None else publish_live
         self._reasons = offline_reasons
         self._mode: str | None = None
         self._thinking = False
 
     def _emit(self, kind: str, **fields: Any) -> None:
+        self._send(self._publish, kind, fields)
+
+    def _send(self, publish: Callable[..., Any], kind: str, fields: dict[str, Any]) -> None:
         try:
-            self._publish(kind, **fields)
+            publish(kind, **fields)
         except Exception:
             log.exception("watch publish failed")
+
+    def hearing(self, on: bool) -> None:
+        self._send(self._publish_live, "hearing", {"on": bool(on)})
 
     def heard(self, text: str) -> None:
         self._emit("heard", text=text)

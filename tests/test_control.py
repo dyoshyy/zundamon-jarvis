@@ -196,6 +196,21 @@ async def test_watch_sends_hello_history_live_marker_then_live_events(watch_serv
     writer.close()
 
 
+async def test_live_only_events_reach_watchers_but_not_the_history(watch_server):
+    hub, path = watch_server
+    reader, writer = await open_watch(path)
+    await read_event(reader)  # hello
+    assert await read_event(reader) == {"kind": "live"}
+    ev = hub.publish_live("hearing", on=True)
+    assert ev["kind"] == "hearing" and ev["on"] is True and ev["id"] == 1
+    assert (await read_event(reader)) == ev
+    writer.close()
+    reader2, writer2 = await open_watch(path)
+    await read_event(reader2)  # hello
+    assert await read_event(reader2) == {"kind": "live"}  # nothing replayed
+    writer2.close()
+
+
 async def test_history_keeps_only_the_latest_events(tmp_path):
     hub = control.WatchHub(history=3, now=fixed_now)
     path = tmp_path / "j.sock"

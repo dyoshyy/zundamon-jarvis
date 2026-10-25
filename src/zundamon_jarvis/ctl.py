@@ -198,6 +198,8 @@ class WatchView:
         if kind == "thinking":
             self._thinking = bool(ev.get("on"))
             return []
+        if kind == "hearing":  # the character's cue, not a line; the turn goes on
+            return []
         self._thinking = False  # any other event means the turn moved on
         speaker = speaker_of(ev)
         line = format_event(ev, self.color, same_speaker=speaker is not None and speaker == self._speaker)
@@ -356,7 +358,7 @@ LAYER_SHELL_LIB = "/usr/lib/libgtk4-layer-shell.so"
 def character_command(preview: str | None = None) -> tuple[list[str], dict[str, str]]:
     """The system-python command and extra environment that run the character overlay."""
     src = str(Path(__file__).resolve().parent.parent)
-    env = {"PYTHONPATH": src}
+    env = {"PYTHONPATH": src, "ZUNDAMON_JARVISCTL": _zundamon_jarvisctl()}  # a click opens watch
     if Path(LAYER_SHELL_LIB).exists():  # layer-shell must be loaded before libwayland-client
         env["LD_PRELOAD"] = LAYER_SHELL_LIB
     return [SYSTEM_PYTHON, "-m", "zundamon_jarvis.character_app", *([preview] if preview else [])], env

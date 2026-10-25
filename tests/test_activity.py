@@ -20,6 +20,14 @@ def test_heard_and_said():
                     ("said", {"text": "明日はジムだよ。", "what": "reply"})]
 
 
+def test_hearing_goes_to_the_live_only_publisher():
+    sink, live = Sink(), Sink()
+    f = ActivityFeed(sink, publish_live=live)
+    f.hearing(True)
+    f.hearing(False)
+    assert live == [("hearing", {"on": True}), ("hearing", {"on": False})] and sink == []
+
+
 def test_tool_use_becomes_a_label_never_the_input():
     f, sink = feed()
     f.brain_event(ToolUse("Write", {"file_path": "/a/memo.md", "content": "秘密"}, None))
