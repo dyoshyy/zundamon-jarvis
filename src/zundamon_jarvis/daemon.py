@@ -22,6 +22,11 @@ Mic (AudioIn) -> SileroVad -> Endpointer -> Orchestrator, plus the control socke
   (plugging in headphones), restart the daemon, or set ``duplex = "half"``.
 - Startup: if another daemon holds the socket, exit 3 (EXIT_ALREADY_RUNNING) before any heavy
   import; the unit has RestartPreventExitStatus=3.
+- Stuck audio (``player.Player`` or ``audio_in.AudioIn`` gave up on PortAudio, e.g. after
+  PipeWire restarted):
+  shut down cleanly and exit 4 (EXIT_AUDIO_STUCK) so the service manager restarts us with a
+  fresh audio stack; if the clean shutdown hangs too, exit hard after HARD_EXIT_S
+  (``AudioGuard``).
 - Watch: heard transcripts, what is said, tool uses, confirmations and state changes go to
   the control socket's ``WatchHub`` (``zundamon-jarvisctl watch``) through ``activity.ActivityFeed``.
 - Settings (``live_settings.LiveSettings`` on the control socket: ``get`` / ``set`` / ``preview``
@@ -37,6 +42,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import date
@@ -54,6 +60,8 @@ from zundamon_jarvis.mics import output_is_builtin_speaker
 log = logging.getLogger(__name__)
 
 EXIT_ALREADY_RUNNING = 3
+EXIT_AUDIO_STUCK = 4
+HARD_EXIT_S = 20.0
 MIC_RETRY_S = 5.0
 MIC_STALL_S = 3.0  # no frame for this long while listening -> reopen the mic
 MIC_MAX_FAILURES = 3  # in a row -> offline
@@ -610,6 +618,32 @@ class TtsWatch:
         return wrapped
 
 
+class AudioGuard:
+    """``Player`` / ``AudioIn`` ``on_stuck``: the first report stops the daemon and arms a hard
+    exit (the clean shutdown can hang on the same stream)."""
+
+    def __init__(
+        self,
+        stop: Callable[[], None],
+        hard_exit: Callable[[int], Any] = os._exit,
+        timer: Callable[..., Any] = threading.Timer,
+    ) -> None:
+        self._stop = stop
+        self._hard_exit = hard_exit
+        self._timer = timer
+        self.exit_code = 0
+
+    def __call__(self, why: str) -> None:
+        if self.exit_code:
+            return
+        self.exit_code = EXIT_AUDIO_STUCK
+        log.error("audio output is stuck (%s): restarting", why)
+        t = self._timer(HARD_EXIT_S, self._hard_exit, args=(EXIT_AUDIO_STUCK,))
+        t.daemon = True
+        t.start()
+        self._stop()
+
+
 # ---- assembly ----
 
 async def _amain(start_paused: bool, sock: Path) -> int:
@@ -650,7 +684,8 @@ async def _amain(start_paused: bool, sock: Path) -> int:
     vv = Voicevox(speaker_id=cfg.speaker_id if cfg.speaker_id is not None else 0, speed=cfg.speed)
     watch = TtsWatch(vv, lambda offline: daemon.set_offline("tts", offline),
                      speaker_name=DEFAULT_SPEAKER if cfg.speaker_id is None else None)
-    player = Player()
+    guard = AudioGuard(lambda: daemon.stop())
+    player = Player(on_stuck=guard)
     speaker = SynthSpeaker(watch.guard_synth(vv.synth), lambda pcm: player.play(pcm, RATE),
                            player.stop)
     clog = ConversationLog(directory)
@@ -684,11 +719,12 @@ async def _amain(start_paused: bool, sock: Path) -> int:
     orch.on_say = on_say
     orch.on_confirm = feed.confirm
     system = platform.system()
-    daemon = Daemon(AudioIn(device=cfg.mic_device, system=system), SileroVad(), Endpointer(),
+    daemon = Daemon(AudioIn(device=cfg.mic_device, system=system, on_stuck=guard),
+                    SileroVad(), Endpointer(),
                     orch, clog, start_paused=start_paused, services=[watch.run],
                     state_observers=[feed.state],
                     half_duplex=duplex_check(cfg.duplex, system))
-    preview_player = Player()  # its own stream: never clobbers the reply player
+    preview_player = Player(on_stuck=guard)  # its own stream: never clobbers the reply player
     live = LiveSettings(cfg, vv, watch, orch,
                         play=lambda pcm: preview_player.play(pcm, RATE),
                         stop_playback=preview_player.stop, mute_ears=daemon.set_ears_muted)
@@ -711,7 +747,7 @@ async def _amain(start_paused: bool, sock: Path) -> int:
         await live.aclose()
         await vv.aclose()
     log.info("bye")
-    return 0
+    return guard.exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -726,4 +762,8 @@ def main(argv: list[str] | None = None) -> int:
     if control.is_live(sock):  # before the heavy imports: a restart loop stays cheap
         log.error("zundamon-jarvis is already running (%s)", sock)
         return EXIT_ALREADY_RUNNING
-    return asyncio.run(_amain(args.start_paused, sock))
+    code = asyncio.run(_amain(args.start_paused, sock))
+    if code == EXIT_AUDIO_STUCK:  # PortAudio's own exit handler would wait on the stuck stream
+        logging.shutdown()
+        os._exit(code)
+    return code

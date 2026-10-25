@@ -79,6 +79,7 @@ async def test_close_stops_delivery_and_drops_buffered_audio():
     s.push(np.zeros(2048))  # 4 frames buffered
     await take(it, 1)
     a.close()
+    assert a.wait_closed(1.0)
     assert s.closed and not s.started
     with pytest.raises(StopAsyncIteration):
         await asyncio.wait_for(it.__anext__(), 1)
@@ -314,4 +315,49 @@ async def test_mac_named_mic_that_vanishes_before_opening_falls_back():
                 source_names=lambda: None, input_index=lambda name: None)
     a.open()
     assert [s.kw["device"] for s in FakeInputStream.instances] == [None] and a.fallback
+    a.close()
+
+
+class HangingAbort(FakeInputStream):
+    """PortAudio's ALSA backend spinning after the audio server went away."""
+
+    def abort(self):
+        import time
+
+        time.sleep(1.0)
+
+
+async def test_close_never_waits_on_portaudio():
+    import time
+
+    a = AudioIn(stream_factory=HangingAbort)
+    a.open()
+    t0 = time.monotonic()
+    a.close()
+    assert time.monotonic() - t0 < 0.1
+
+
+async def test_opening_after_a_hung_close_reports_stuck_instead_of_racing_it():
+    import time
+
+    seen = []
+    a = AudioIn(stream_factory=HangingAbort, on_stuck=seen.append, close_timeout_s=0.2)
+    a.open()
+    a.close()
+    t0 = time.monotonic()
+    with pytest.raises(RuntimeError, match="stuck"):
+        a.open()
+    assert time.monotonic() - t0 < 0.5
+    assert len(seen) == 1 and len(HangingAbort.instances) == 1  # no second stream opened
+    with pytest.raises(RuntimeError):
+        a.open()
+    assert len(seen) == 1
+
+
+async def test_open_waits_for_a_slow_but_finishing_close():
+    a = AudioIn(stream_factory=FakeInputStream, close_timeout_s=1.0)
+    a.open()
+    a.close()
+    a.open()  # the first close finishes quickly: no complaint
+    assert len(FakeInputStream.instances) == 2
     a.close()
