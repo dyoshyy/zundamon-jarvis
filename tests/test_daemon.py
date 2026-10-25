@@ -10,6 +10,9 @@ from fakes import settle
 
 from zundamon_jarvis.daemon import (
     DIGITAL_SILENCE_S,
+    EXIT_AUDIO_STUCK,
+    HARD_EXIT_S,
+    AudioGuard,
     HALF_DUPLEX_TAIL_S,
     SAMPLE_RATE,
     Daemon,
@@ -1196,3 +1199,27 @@ async def test_full_duplex_unchanged_on_linux(parts):
     assert calls == []  # no extra resets
     d.stop()
     await task
+
+
+def test_stuck_audio_stops_the_daemon_once_and_arms_a_hard_exit():
+    stops, timers = [], []
+
+    class FakeTimer:
+        def __init__(self, after, fn, args=()):
+            self.after, self.fn, self.args = after, fn, args
+            self.daemon = False
+            timers.append(self)
+
+        def start(self):
+            self.started = True
+
+    exits = []
+    guard = AudioGuard(lambda: stops.append(1), hard_exit=exits.append, timer=FakeTimer)
+    assert guard.exit_code == 0
+    guard("playback did not finish")
+    guard("again")  # the second player too: still one restart
+    assert stops == [1] and len(timers) == 1
+    (t,) = timers
+    assert t.daemon and t.started and t.after == HARD_EXIT_S
+    t.fn(*t.args)  # the clean shutdown hung too
+    assert exits == [EXIT_AUDIO_STUCK] and guard.exit_code == EXIT_AUDIO_STUCK != 0

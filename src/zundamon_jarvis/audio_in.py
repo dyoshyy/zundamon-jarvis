@@ -12,6 +12,13 @@ follows the OS default input (PipeWire's default source).
 macOS (CoreAudio): PULSE_SOURCE is never touched. None opens sounddevice's default input; a
 name is a CoreAudio input device name, resolved to its PortAudio index by exact match
 (sounddevice's own name lookup matches substrings and gives up on two hits); an int is an index.
+
+``close()`` never waits on PortAudio: aborting and closing the stream happen on a thread.
+When the audio server goes away (PipeWire restarted) the ALSA backend's capture thread can
+spin forever and that abort never returns; done on the event loop it froze the daemon.
+``open()`` waits up to ``close_timeout_s`` for the previous stream to close (PortAudio calls
+stay one at a time); if it is still not closed the input is *stuck*: ``on_stuck(why)`` is
+called once (the daemon restarts itself) and every open fails.
 """
 
 import asyncio
@@ -35,6 +42,7 @@ FRAME_SAMPLES = 512
 # Linux: set mic_device = "zundamon_jarvis_aec_source" in config.toml to use echo cancellation
 # (see deploy/). On a Mac mic_device is a CoreAudio input device name.
 _MAX_BUFFERED_FRAMES = 500  # ~16 s; the oldest frames are dropped beyond this
+CLOSE_TIMEOUT_S = 5.0
 
 
 class AudioIn:
@@ -47,7 +55,13 @@ class AudioIn:
         *,
         system: str | None = None,
         input_index: Callable[[str], int | None] = input_device_index,
+        on_stuck: Callable[[str], None] = lambda why: None,
+        close_timeout_s: float = CLOSE_TIMEOUT_S,
     ) -> None:
+        self._on_stuck = on_stuck
+        self._close_timeout_s = close_timeout_s
+        self._closing: threading.Thread | None = None
+        self.stuck = False
         self._system = system or platform.system()
         if source_names is None:
             sys_ = self._system
@@ -73,9 +87,30 @@ class AudioIn:
         """True while a configured mic could not be opened and the OS default is in use."""
         return self._fallback
 
+    def wait_closed(self, timeout: float) -> bool:
+        """True once the last closed stream is really closed (False: still not, after timeout)."""
+        closing = self._closing
+        if closing is not None:
+            closing.join(timeout)
+            if closing.is_alive():
+                return False
+            self._closing = None
+        return True
+
     def open(self) -> None:
         if self._stream is not None:
             return
+        if self.stuck:
+            raise RuntimeError("audio input stuck: the previous stream never closed")
+        if not self.wait_closed(self._close_timeout_s):
+            self.stuck = True
+            why = f"closing the previous input stream did not finish in {self._close_timeout_s:g} s"
+            log.error("audio input stuck: %s", why)
+            try:
+                self._on_stuck(why)
+            except Exception:
+                log.exception("on_stuck failed")
+            raise RuntimeError(f"audio input stuck: {why}")
         with self._lock:
             self._frames.clear()
             self._pending = np.zeros(0, np.float32)
@@ -153,10 +188,9 @@ class AudioIn:
             self._pending = np.zeros(0, np.float32)
         stream, self._stream = self._stream, None
         if stream is not None:
-            try:
-                stream.abort()
-            finally:
-                stream.close()
+            self._closing = threading.Thread(target=_stop_stream, args=(stream,), daemon=True,
+                                             name="audio-in-close")
+            self._closing.start()
         self._notify()
 
     # --- audio thread ----------------------------------------------------
@@ -214,3 +248,14 @@ class AudioIn:
         finally:
             if self._wake is not None and self._wake[1] is event:
                 self._wake = None
+
+
+def _stop_stream(stream: Any) -> None:
+    try:
+        stream.abort()
+    except Exception:
+        log.debug("input stream abort failed", exc_info=True)
+    try:
+        stream.close()
+    except Exception:
+        log.debug("input stream close failed", exc_info=True)
