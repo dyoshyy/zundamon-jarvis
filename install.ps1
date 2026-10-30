@@ -1,5 +1,5 @@
 # zundamon-jarvis one-line installer (Windows 10 / 11, x64)
-#   powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"
+#   powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"
 # 環境変数: ZJ_VERSION=v0.1.0 (版を固定) / ZJ_DRY_RUN=1 (実行せず表示だけ)
 #           ZJ_LANG=ja|en (表示の言語。既定は Windows の表示言語: 日本語なら日本語、ほかは英語)
 #   例: $env:ZJ_DRY_RUN = '1'; irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex

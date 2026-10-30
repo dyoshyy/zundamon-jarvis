@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/instal
 **Windows** (PowerShell, no admin rights needed)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"
 ```
 
 The installer opens the setup window. It downloads the voice engine and the speech model, then walks you

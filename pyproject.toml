@@ -1,6 +1,6 @@
 [project]
 name = "zundamon-jarvis"
-version = "0.1.0"
+version = "0.2.0"
 description = "A voice assistant that talks to Claude Code, voiced by VOICEVOX Zundamon (macOS, Windows, Linux)"
 readme = "README.md"
 authors = [

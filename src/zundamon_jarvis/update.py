@@ -60,7 +60,7 @@ CHECK_EVERY_S = 6 * 3600.0
 
 INSTALLER = {
     "mac": "curl -fsSL https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.sh | sh",
-    "windows": ('powershell -ExecutionPolicy Bypass -c "irm '
+    "windows": ('powershell -NoProfile -ExecutionPolicy Bypass -c "irm '
                 'https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"'),
     "linux": "https://github.com/dyoshyy/zundamon-jarvis#linux",
 }
