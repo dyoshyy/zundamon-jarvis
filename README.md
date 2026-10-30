@@ -12,6 +12,17 @@ You talk, it transcribes locally, asks Claude Code, and answers out loud.
 
 ## Install
 
+### Before you install
+
+The installer stops if the `claude` command isn't found. The Claude desktop app alone doesn't provide it,
+so install the Claude Code CLI first:
+
+- **Mac:** `curl -fsSL https://claude.ai/install.sh | bash`
+- **Windows:** `irm https://claude.ai/install.ps1 | iex` (PowerShell)
+
+If the CLI installer says `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin`) is not on your PATH, add it and
+reopen the terminal. Then run `claude` once and log in. `claude --version` should work before you go on.
+
 **Mac**
 
 ```sh
@@ -81,6 +92,17 @@ Settings, file locations, the Windows service and troubleshooting are in [docs/r
 - **ヘッドホン推奨:** スピーカーだと声をマイクが拾うので、話している途中で割り込めません。
 
 ## インストール
+
+### インストールの前に
+
+`claude` コマンドが見つからないと、インストーラは止まります。Claude のデスクトップアプリだけでは `claude` コマンドは入らないので、
+先に Claude Code の CLI を入れてください。
+
+- **Mac:** `curl -fsSL https://claude.ai/install.sh | bash`
+- **Windows:** `irm https://claude.ai/install.ps1 | iex`（PowerShell で実行）
+
+CLI のインストーラが「`~/.local/bin`（Windows は `%USERPROFILE%\.local\bin`）が PATH に入っていない」と言ったら、PATH に足してからターミナルを開き直します。
+そのあと `claude` を一度起動してログインします。`claude --version` が動けば準備完了です。
 
 上の Install にあるコマンドを、Mac はターミナル、Windows は PowerShell で実行します。
 
