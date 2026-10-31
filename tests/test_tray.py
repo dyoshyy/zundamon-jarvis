@@ -175,3 +175,48 @@ def test_icon_image_has_a_dot_and_greys_when_down():
     assert corner[:3] == tray.BADGE["listening"]
     r, g, b, _ = down.getpixel((tray.ICON_SIZE // 2, tray.ICON_SIZE // 2))
     assert r == g == b
+
+
+def test_tray_shows_the_update_once_it_is_known_and_notifies_once():
+    icon = Icon("x")
+    app = tray.TrayApp(fake_pystray, icon, lambda a: None, image=lambda s: s)
+    up = {"state": "listening", "text": "Listening"}
+    app.show(up)
+    assert not icon.notes
+    app.update = "v0.2.0"
+    app.show(up)
+    app.show(up)
+    assert sum(1 for i in icon.menu.items if i.action and "v0.2.0" in i.text) == 1
+    assert len(icon.notes) == 1 and "v0.2.0" in icon.notes[0]
+
+
+def test_act_on_update_launches_it_off_thread(monkeypatch):
+    done = threading.Event()
+    monkeypatch.setattr(tray.updater, "launch_from_menu", lambda sys_: done.set())
+    tray.act_on("update", lambda: pytest.fail("not a quit"))
+    assert done.wait(5)
+
+
+def test_run_tray_starts_the_update_check_and_stops_it_on_quit(monkeypatch):
+    monkeypatch.setattr(tray, "POLL_S", 0.01)
+    holder, watched = {}, []
+
+    class QuittingIcon(Icon):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            holder["icon"] = self
+
+    def start_watch(on_result, stop):
+        watched.append(stop)
+        on_result("v0.2.0")
+
+    def fetch():
+        items = holder["icon"].menu.items
+        if any("v0.2.0" in i.text for i in items):  # quit once the update shows
+            quit_item = next(i for i in items if i.text.startswith("Quit tray"))
+            quit_item.action(None, quit_item)
+        return {"state": "listening", "text": "Listening"}
+
+    pystray = types.SimpleNamespace(MenuItem=MenuItem, Menu=Menu, Icon=QuittingIcon)
+    assert tray.run_tray(pystray, fetch=fetch, image=lambda s: s, lock=Lock(), start_watch=start_watch) == 0
+    assert len(watched) == 1 and watched[0].is_set()

@@ -11,6 +11,9 @@ native menu, which could be open at that moment).
 The supervisor starts it at login. "Quit tray" exits 0, which the supervisor leaves quit (the
 daemon keeps running); a crash restarts it. ``tray.lock`` in ``platform.runtime_dir()`` keeps
 it to one icon when it is also started by hand.
+
+A newer release (``zundamon_jarvis.update``, looked up in the background) adds "Update to <tag>…"
+to the menu, and its note shows once as a notification.
 """
 
 import textwrap
@@ -20,6 +23,7 @@ from importlib import resources
 from typing import Any
 
 from zundamon_jarvis import ctl, menubar, platform
+from zundamon_jarvis import update as updater
 from zundamon_jarvis.control import request
 from zundamon_jarvis.menubar import MenuModel
 
@@ -109,6 +113,7 @@ class TrayApp:
         self._state: object = _UNSET
         self._model: MenuModel | None = None
         self._note: str | None = None
+        self.update: str | None = None  # a newer release's tag (set by the update check's thread)
 
     def show(self, status: dict | None) -> None:
         state = None if status is None else status.get("state", "")
@@ -116,7 +121,7 @@ class TrayApp:
             self._icon.icon = self._image(state)
             self._state = state
         self._icon.title = tooltip(status)  # pystray skips an unchanged title
-        model = menubar.menu_model(status, "windows")
+        model = menubar.menu_model(status, "windows", update=self.update)
         if model != self._model:
             self._icon.menu = build_menu(self._pystray, model, self._act)
             self._model = model
@@ -139,12 +144,15 @@ def act_on(action: str, stop: Callable[[], None]) -> None:
                 pass
         elif action in ("conversation", "settings"):
             ctl.open_window("watch" if action == "conversation" else "settings")
+        elif action == "update":
+            updater.launch_from_menu("windows")
 
     threading.Thread(target=run, daemon=True).start()
 
 
 def run_tray(pystray: Any = None, fetch: Callable[[], dict | None] = menubar.fetch_status,
-             image: Callable[[str | None], Any] = icon_image, lock: Any = None) -> int:
+             image: Callable[[str | None], Any] = icon_image, lock: Any = None,
+             start_watch: Callable[..., Any] = updater.start_watch) -> int:
     from zundamon_jarvis.supervisor import InstanceLock
 
     lock = lock or InstanceLock(platform.runtime_dir() / LOCK)
@@ -162,6 +170,7 @@ def run_tray(pystray: Any = None, fetch: Callable[[], dict | None] = menubar.fet
 
         app = TrayApp(pystray, icon, lambda a: act_on(a, quit_tray), image)
         app.show(None)
+        start_watch(lambda tag: setattr(app, "update", tag), stop)
 
         def poll(icon: Any) -> None:  # pystray's setup thread
             icon.visible = True
