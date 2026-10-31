@@ -1,13 +1,29 @@
-"""Local Japanese speech-to-text: faster-whisper on CUDA (Linux), mlx-whisper on Apple Silicon (Mac)."""
+"""Local Japanese speech-to-text: faster-whisper on CUDA (Linux), mlx-whisper on Apple Silicon
+(Mac), faster-whisper on CUDA or else the CPU (Windows).
+
+Windows: the cuBLAS/cuDNN DLLs come from the ``nvidia-cublas-cu12`` / ``nvidia-cudnn-cu12`` wheels
+(``site-packages/nvidia/*/bin``). CTranslate2 loads them by name at run time, so those
+directories go on the DLL search path (``os.add_dll_directory``) and on PATH (a plain
+``LoadLibrary``, and cuBLAS loading cuBLASLt, only search PATH) before ctranslate2 is imported.
+CTranslate2's Windows wheel ships its own ``cudnn64_9.dll`` (9.10.2.21), which loads the cuDNN
+sub-libraries from PATH and refuses ones of another version: pyproject pins ``nvidia-cudnn-cu12``
+to that version on Windows. A PC without an NVIDIA GPU (no CUDA device), or one where CUDA
+fails to run a first, silent transcription, gets the CPU with int8 weights: slower, but it works.
+"""
 
 import ctypes
 import glob
+import logging
 import os
 import sys
 import sysconfig
+from collections.abc import Callable, MutableMapping
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 FASTER_WHISPER_MODEL = "large-v3-turbo"
 MLX_MODEL = "mlx-community/whisper-large-v3-turbo"
@@ -28,7 +44,38 @@ def _preload_cuda_libs() -> None:
                 ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
 
 
+def cuda_dll_dirs(purelib: str) -> list[str]:
+    """Windows: the existing ``bin`` directories of the pip-installed cuBLAS and cuDNN."""
+    root = os.path.join(purelib, "nvidia")
+    return [d for pkg in ("cublas", "cudnn") if os.path.isdir(d := os.path.join(root, pkg, "bin"))]
+
+
+_DLL_DIRS: list[Any] = []  # add_dll_directory handles: the directory leaves the path when closed
+
+
+def add_cuda_dll_dirs(purelib: str | None = None,
+                      add_dll_directory: Callable[[str], Any] | None = None,
+                      environ: MutableMapping[str, str] = os.environ) -> list[str]:
+    """Windows: put the cuBLAS/cuDNN ``bin`` directories on the DLL search path and in front of
+    PATH (once); returns the directories."""
+    dirs = cuda_dll_dirs(purelib or sysconfig.get_paths()["purelib"])
+    add = add_dll_directory or os.add_dll_directory  # type: ignore[attr-defined]
+    path = environ.get("PATH", "")
+    for d in dirs:
+        try:
+            _DLL_DIRS.append(add(d))
+        except OSError:
+            log.debug("add_dll_directory(%s) failed", d, exc_info=True)
+    known = {p.lower() for p in path.split(os.pathsep) if p}
+    new = [d for d in dirs if d.lower() not in known]
+    if new:
+        environ["PATH"] = os.pathsep.join(new + ([path] if path else []))
+    return dirs
+
+
 _preload_cuda_libs()
+if sys.platform == "win32":
+    add_cuda_dll_dirs()
 
 
 class Transcriber:
@@ -72,11 +119,41 @@ class MlxTranscriber:
         return result["text"].strip()
 
 
+def _cuda_device_count() -> int:
+    import ctranslate2
+
+    return ctranslate2.get_cuda_device_count()
+
+
+def windows_transcriber(factory: Callable[..., Any] = Transcriber,
+                        cuda_device_count: Callable[[], int] = _cuda_device_count) -> Any:
+    """Windows: CUDA (float16) when there is a CUDA device and it transcribes a second of
+    silence (cuBLAS/cuDNN are loaded on the first run, not with the model), else the CPU."""
+    try:
+        count = cuda_device_count()
+    except Exception as e:  # noqa: BLE001 -- no driver, a broken install: the CPU still works
+        log.warning("cannot count CUDA devices (%s)", e)
+        count = 0
+    if count > 0:
+        try:
+            t = factory(device="cuda", compute_type="float16")
+            t.transcribe(np.zeros(16000, np.float32))
+            return t
+        except Exception as e:  # noqa: BLE001 -- e.g. a cuBLAS/cuDNN DLL that will not load
+            log.warning("speech recognition on CUDA failed (%s); using the CPU (int8)", e)
+    else:
+        log.info("no CUDA device; speech recognition runs on the CPU (int8)")
+    return factory(device="cpu", compute_type="int8")
+
+
 def make_transcriber(system: str | None = None):
     from zundamon_jarvis.platform import system as _system
 
-    if (system or _system()) == "mac":
+    sys_ = system or _system()
+    if sys_ == "mac":
         return MlxTranscriber()
+    if sys_ == "windows":
+        return windows_transcriber()
     return Transcriber()
 
 
