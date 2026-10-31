@@ -1,11 +1,13 @@
 """`zundamon-jarvis daemon [--start-paused]` / `voices [--no-play]` / `menubar` (macOS) /
-`service` / `engine install` / `models download` / `setup` / `doctor` / `uninstall`."""
+`tray` / `supervise` (Windows) / `service` / `engine install` / `models download` / `setup` /
+`doctor` / `uninstall`."""
 
 import sys
 
 USAGE = ("usage: zundamon-jarvis setup | zundamon-jarvis doctor | zundamon-jarvis uninstall"
          " | zundamon-jarvis daemon [--start-paused] | zundamon-jarvis voices [--no-play]"
-         " | zundamon-jarvis menubar | zundamon-jarvis service install|uninstall|status"
+         " | zundamon-jarvis menubar | zundamon-jarvis tray | zundamon-jarvis supervise"
+         " | zundamon-jarvis service install|uninstall|status|start|stop"
          " | zundamon-jarvis engine install [--cpu] | zundamon-jarvis models download")
 
 
@@ -29,11 +31,27 @@ def main(argv: list[str] | None = None) -> int:
         from zundamon_jarvis.menubar import run_menubar
 
         return run_menubar()
-    if cmd == "service" and len(rest) == 1 and rest[0] in ("install", "uninstall", "status"):
+    if cmd == "tray" and not rest:
+        from zundamon_jarvis.tray import run_tray
+
+        return run_tray()
+    if cmd == "supervise":
+        from zundamon_jarvis import supervisor
+
+        return supervisor.main(rest)
+    if cmd == "service" and len(rest) == 1 and rest[0] in ("install", "uninstall", "status", "start", "stop"):
         from zundamon_jarvis import platform, service
 
         sys_ = platform.system()
-        if rest[0] == "install":
+        if rest[0] in ("start", "stop") and sys_ != "windows":
+            how = "systemctl --user start|stop zundamon-jarvis" if sys_ == "linux" else "launchctl"
+            print(f"service {rest[0]} is for Windows (the supervisor); here use {how}", file=sys.stderr)
+            return 2
+        if rest[0] == "start":
+            print("started" if service.start_services(sys_) else "already running")
+        elif rest[0] == "stop":
+            print(service.stop_services(sys_))
+        elif rest[0] == "install":
             service.install_services(sys_)
         elif rest[0] == "uninstall":
             service.uninstall_services(sys_)

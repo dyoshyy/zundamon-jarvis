@@ -68,3 +68,10 @@ def test_cli_dispatches_menubar(monkeypatch):
     monkeypatch.setattr("zundamon_jarvis.menubar.run_menubar", lambda: seen.append(1) or 0)
     assert cli.main(["menubar"]) == 0
     assert seen == [1]
+
+
+def test_windows_model_has_the_tray_quit_label_and_windows_mic_advice():
+    m = menubar.menu_model({"state": "offline", "text": "Offline (mic)"}, "windows")
+    assert m.items[-1] == menubar.MenuItem("Quit tray (daemon keeps running)", "quit")
+    assert "デスクトップ アプリがマイクにアクセス" in m.note and "python3.12" not in m.note
+    assert menubar.menu_model(None, "windows").items[-1].label.startswith("Quit tray")

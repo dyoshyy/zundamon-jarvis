@@ -327,9 +327,29 @@ WINDOWS: dict[str, list[str]] = {
 
 
 def _zundamon_jarvisctl() -> str:
-    """This venv's zundamon-jarvisctl, by absolute path (the bar runs commands without our PATH)."""
-    exe = Path(sys.executable).with_name("zundamon-jarvisctl")
-    return str(exe) if exe.exists() else (shutil.which("zundamon-jarvisctl") or "zundamon-jarvisctl")
+    """This venv's zundamon-jarvisctl, by absolute path (the bar runs commands without our PATH;
+    on Windows it is ``zundamon-jarvisctl.exe`` beside python.exe)."""
+    for name in ("zundamon-jarvisctl", "zundamon-jarvisctl.exe"):
+        exe = Path(sys.executable).with_name(name)
+        if exe.exists():
+            return str(exe)
+    return shutil.which("zundamon-jarvisctl") or "zundamon-jarvisctl"
+
+
+def _enable_vt() -> None:
+    """Let a classic Windows console (conhost) render the watch view's colors: it prints escape
+    codes raw until asked. Windows Terminal always renders them; elsewhere this does nothing."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        k = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        out, mode = k.GetStdHandle(-11), ctypes.c_uint32()  # STD_OUTPUT_HANDLE
+        if k.GetConsoleMode(out, ctypes.byref(mode)):
+            k.SetConsoleMode(out, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except (AttributeError, OSError):
+        pass
 
 
 def open_window(name: str) -> int:
@@ -373,6 +393,7 @@ def _character(preview: str | None, execve: Callable[..., Any] = os.execve) -> i
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args == ["watch"]:
+        _enable_vt()
         return watch()
     if args == ["settings"]:
         from zundamon_jarvis.settings_app import main as settings_main

@@ -52,3 +52,27 @@ def test_models_download_failure_is_reported(monkeypatch, capsys):
 def test_version_flag(capsys):
     assert cli.main(["--version"]) == 0
     assert capsys.readouterr().out.strip().count(".") >= 1
+
+
+def test_tray_and_supervise_dispatch(monkeypatch):
+    seen = []
+    monkeypatch.setattr("zundamon_jarvis.tray.run_tray", lambda: seen.append("tray") or 0)
+    monkeypatch.setattr("zundamon_jarvis.supervisor.main", lambda argv: seen.append(("supervise", argv)) or 0)
+    assert cli.main(["tray"]) == 0
+    assert cli.main(["supervise"]) == 0
+    assert seen == ["tray", ("supervise", [])]
+
+
+def test_service_start_stop_on_windows(monkeypatch, capsys):
+    monkeypatch.setattr("zundamon_jarvis.platform.system", lambda: "windows")
+    monkeypatch.setattr("zundamon_jarvis.service.start_services", lambda s: True)
+    monkeypatch.setattr("zundamon_jarvis.service.stop_services", lambda s: "stopped")
+    assert cli.main(["service", "start"]) == 0
+    assert cli.main(["service", "stop"]) == 0
+    assert capsys.readouterr().out.split() == ["started", "stopped"]
+
+
+def test_service_start_stop_elsewhere_points_to_the_service_manager(monkeypatch, capsys):
+    monkeypatch.setattr("zundamon_jarvis.platform.system", lambda: "linux")
+    assert cli.main(["service", "stop"]) == 2
+    assert "systemctl --user" in capsys.readouterr().err

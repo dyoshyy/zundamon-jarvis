@@ -334,3 +334,9 @@ def test_view_names_the_speaker_again_after_another_kind_of_line():
               ev("heard", text="b")]
     out = [line for i, e in enumerate(events, 1) for line in view.feed({**e, "id": i})]
     assert out[2] == "09:05 You ▸\n  b"
+
+
+def test_window_command_finds_the_windows_exe_beside_python(tmp_path, monkeypatch):
+    (tmp_path / "zundamon-jarvisctl.exe").write_text("")
+    monkeypatch.setattr(ctl.sys, "executable", str(tmp_path / "python.exe"))
+    assert ctl._zundamon_jarvisctl() == str(tmp_path / "zundamon-jarvisctl.exe")

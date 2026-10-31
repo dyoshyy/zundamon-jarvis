@@ -5,15 +5,17 @@ English | [日本語](#日本語)
 A hands-free voice assistant for [Claude Code](https://claude.com/claude-code), voiced by
 VOICEVOX's Zundamon. You talk, it listens (speech-to-text runs locally), asks Claude Code, and
 answers out loud in short spoken sentences. It runs as a background service and has a small
-control surface (menu bar on macOS, `zundamon-jarvisctl` and an optional bar module on Linux).
+control surface (menu bar on macOS, a tray icon on Windows, `zundamon-jarvisctl` and an optional
+bar module on Linux).
 
-Supported environments: **linux-x86_64** and **macos-arm64** only.
+Supported environments: **linux-x86_64**, **macos-arm64** and **windows-x86_64** only.
 
 ## Requirements
 
 - **Mac:** Apple Silicon (M1 or later) with **macOS 14 Sonoma or later** (the onnxruntime wheels need it).
   Intel Macs are not supported. **Mac support is beta.**
 - **Linux:** x86_64 with an **NVIDIA CUDA GPU** (speech-to-text and VOICEVOX run on the GPU), PipeWire, systemd user session (see [Linux](#linux)).
+- **Windows:** Windows 10 or 11, x64 (VOICEVOX uses the DirectML build). **Windows support is beta.**
 - **Japanese only:** speech recognition, the voice, and the built-in prompts are Japanese; other languages are not supported.
 - [Claude Code](https://claude.com/claude-code) installed and **logged in** (run `claude` once).
 - About 8 GB of free disk (VOICEVOX engine and the speech-to-text model).
@@ -31,13 +33,41 @@ The installer sets up uv, the VOICEVOX engine and the STT model, then runs `zund
 service). Re-running it is safe; finished steps are skipped. A step-by-step walkthrough in Japanese is in
 [docs/mac-checklist.md](docs/mac-checklist.md).
 
+## Install (Windows)
+
+In PowerShell (no administrator rights needed):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"
+```
+
+The installer checks for Claude Code and 8 GB of free disk, installs uv if it is missing, installs
+zundamon-jarvis with `uv tool install` (git is not needed), then runs `zundamon-jarvis setup`, which opens
+the setup page in your browser; it downloads the VOICEVOX engine and the speech-to-text model and sets up
+the always-on service. Re-running the same line is safe. `$env:ZJ_VERSION = 'v0.1.0'` pins a version,
+`$env:ZJ_DRY_RUN = '1'` only prints what it would do.
+
+Windows has no per-user service manager, so a small supervisor does that job: `zundamon-jarvis supervise`
+(started at login by the `ZundamonJarvis` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+through the windowless `zundamon-jarvisw.exe`) runs the VOICEVOX engine, the daemon and the tray icon without
+console windows, and restarts them the way the Linux systemd unit does (the daemon gives up after 5 crashes
+in 5 minutes; quitting the tray icon leaves it quit). `zundamon-jarvis service stop` stops everything until
+the next login or `zundamon-jarvis service start`; `zundamon-jarvis service status` shows each part;
+`zundamon-jarvis uninstall` removes the login entry. If it does not start at login, check that
+**ZundamonJarvis** is on in Settings > Apps > Startup.
+
 ## Usage
 
 On macOS a menu bar icon shows the state (listening, thinking, speaking, paused, daemon down). Its menu
 has **Pause / Resume**, **Conversation…** (a live view of what was heard and said) and **Settings…**
 (voice speed, voice, model, microphone). Quitting the menu bar app leaves the daemon running.
 
-From a shell (both platforms):
+On Windows the tray icon (notification area; it may sit in the overflow `^` until you pin it) has the same
+menu, and a left click opens the conversation. Its dot shows the state; it is greyed out while the daemon
+is down. Conversation and Settings open in a Windows Terminal window (a console window if Windows Terminal
+is not installed). Quitting the tray icon leaves the daemon running.
+
+From a shell (every platform):
 
 - `zundamon-jarvisctl toggle | pause | resume | status`
 - `zundamon-jarvisctl watch` streams the conversation; `zundamon-jarvisctl settings` opens the settings window
@@ -59,12 +89,12 @@ From a shell (both platforms):
 | `mic_device` | Input device: a source name or a PortAudio device index. Unset = follow the OS default input. |
 | `duplex` | `auto` (default), `full` (always listening) or `half` (mic ignored while she speaks, no barge-in). `auto` means `half` only on a Mac playing through its built-in speakers (always `full` on Linux). |
 
-| | Linux | macOS |
-|---|---|---|
-| config | `~/.config/zundamon-jarvis/config.toml` | `~/Library/Application Support/zundamon-jarvis/config.toml` |
-| data (engine, models) | `~/.local/share/zundamon-jarvis/` | `~/Library/Application Support/zundamon-jarvis/` |
-| logs / conversation log | `~/.local/state/zundamon-jarvis/` | `~/Library/Logs/zundamon-jarvis/` |
-| service | systemd user units | LaunchAgents in `~/Library/LaunchAgents/` |
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| config | `~/.config/zundamon-jarvis/config.toml` | `~/Library/Application Support/zundamon-jarvis/config.toml` | `%APPDATA%\zundamon-jarvis\config.toml` |
+| data (engine, models) | `~/.local/share/zundamon-jarvis/` | `~/Library/Application Support/zundamon-jarvis/` | `%LOCALAPPDATA%\zundamon-jarvis\` |
+| logs / conversation log | `~/.local/state/zundamon-jarvis/` | `~/Library/Logs/zundamon-jarvis/` | `%LOCALAPPDATA%\zundamon-jarvis\logs\` |
+| service | systemd user units | LaunchAgents in `~/Library/LaunchAgents/` | `ZundamonJarvis` in `HKCU\…\CurrentVersion\Run`, starting `zundamon-jarvis supervise` |
 
 ## Linux
 
@@ -115,6 +145,10 @@ Answering "no" (or anything unclear) cancels the action.
 
 - **No reaction / "mic unavailable" (Mac):** System Settings > Privacy & Security > Microphone, turn on
   **python3.12** (the daemon's name) as well as your terminal. Then `zundamon-jarvisctl status`.
+- **No reaction / "mic unavailable" (Windows):** Settings > Privacy & security > Microphone, turn on
+  **Let desktop apps access your microphone**. Then `zundamon-jarvisctl status`.
+- **Windows: nothing runs after login:** `zundamon-jarvis service status`, and the logs in
+  `%LOCALAPPDATA%\zundamon-jarvis\logs\` (`supervisor.log`, `daemon.log`, `engine.log`, `tray.log`).
 - **Not logged in:** run `claude` in a terminal and log in.
 - **She hears herself:** use headphones, or on Linux install the optional echo cancellation.
 - **Anything else:** run `zundamon-jarvis doctor` and attach its (redacted) output to an issue.
@@ -141,14 +175,15 @@ or the Zundamon character.
 
 [Claude Code](https://claude.com/claude-code) を声で操作するための、VOICEVOX ずんだもんの音声アシスタントです。
 話しかけると（文字起こしはローカルで実行）、Claude Code に聞いて、短い話し言葉で答えてくれます。
-常駐サービスとして動き、Mac ではメニューバー、Linux では `zundamon-jarvisctl`（と任意のバーモジュール）で操作します。
+常駐サービスとして動き、Mac ではメニューバー、Windows では通知領域（タスクトレイ）のアイコン、Linux では `zundamon-jarvisctl`（と任意のバーモジュール）で操作します。
 
-対応環境は **linux-x86_64** と **macos-arm64** のみです。
+対応環境は **linux-x86_64**、**macos-arm64**、**windows-x86_64** のみです。
 
 ## 必要なもの
 
 - **Mac:** Apple シリコン（M1 以降）と **macOS 14 Sonoma 以降**（onnxruntime の都合）。Intel Mac は非対応。**Mac 対応はベータ版です。**
 - **Linux:** x86_64 と **NVIDIA の CUDA GPU**（文字起こしと VOICEVOX は GPU で動かします）、PipeWire、systemd のユーザーセッション（[Linux](#linux) 参照）。
+- **Windows:** Windows 10 / 11 の x64（VOICEVOX は DirectML 版を使います）。**Windows 対応はベータ版です。**
 - **日本語専用:** 音声認識・声・内蔵プロンプトはすべて日本語です。他の言語には対応していません。
 - [Claude Code](https://claude.com/claude-code) をインストールし、**ログイン済み**であること（一度 `claude` を起動）。
 - ディスクの空き 8 GB 程度（VOICEVOX エンジンと文字起こしモデル）。
@@ -164,10 +199,30 @@ uv、VOICEVOX エンジン、文字起こしモデルを用意し、`zundamon-ja
 知識フォルダ、モデル、常駐設定）まで進みます。途中で止まっても同じ 1 行で続きから進みます。
 詳しい手順は [docs/mac-checklist.md](docs/mac-checklist.md) を見てください。
 
+## インストール（Windows）
+
+PowerShell で（管理者権限は要りません）:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"
+```
+
+Claude Code とディスクの空き（8 GB）を確認し、uv が無ければ入れて、`uv tool install` で本体を入れ（git は不要）、
+`zundamon-jarvis setup` を起動します。設定はブラウザで開き、VOICEVOX エンジンと文字起こしモデルの取得、常駐の設定までそこで済みます。
+同じ 1 行を何度実行しても大丈夫です。`$env:ZJ_VERSION = 'v0.1.0'` で版を固定、`$env:ZJ_DRY_RUN = '1'` で実行せず表示だけになります。
+
+Windows には systemd や launchd にあたるものが無いので、`zundamon-jarvis supervise` が代わりを務めます。ログイン時に
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` の `ZundamonJarvis` から（ウィンドウの出ない `zundamon-jarvisw.exe` で）起動し、
+VOICEVOX エンジン・デーモン・トレイアイコンをコンソール窓なしで動かし、落ちたら起こし直します（5 分に 5 回落ちたらあきらめます。トレイを終了したときは起こしません）。
+`zundamon-jarvis service stop` で次のログイン（か `zundamon-jarvis service start`）まで止まり、`zundamon-jarvis service status` で各部の状態が見られます。
+ログイン時に起動しないときは、設定 > アプリ > スタートアップ で **ZundamonJarvis** がオンになっているか確認してください。
+
 ## 使い方
 
 Mac ではメニューバーのアイコンが状態を表し、メニューから **Pause / Resume**、**Conversation…**（会話のライブ表示）、
 **Settings…**（速度・声・モデル・マイク）を開けます。メニューバーを終了しても常駐は止まりません。
+Windows ではトレイアイコン（隠れているときは `^` の中）が同じメニューを持ち、左クリックで会話を開きます。
+Conversation と Settings は Windows Terminal の窓で開きます。トレイを終了しても常駐は止まりません。
 シェルからは `zundamon-jarvisctl toggle|pause|resume|status|watch|settings|get|set`、`zundamon-jarvis setup|doctor|uninstall` が使えます。
 
 ## 設定
@@ -177,7 +232,8 @@ Mac ではメニューバーのアイコンが状態を表し、メニューか�
 `speed`（0.8〜2.0、既定 1.2）、`speaker_id`（声）、`mic_device`（入力デバイス。未設定ならOS既定）、`duplex`（`auto`/`full`/`half`。`half` は話している間マイクを無視）。
 
 置き場所は Linux が `~/.config/zundamon-jarvis/config.toml`、Mac が `~/Library/Application Support/zundamon-jarvis/config.toml`。
-ログは Linux が `~/.local/state/zundamon-jarvis/`、Mac が `~/Library/Logs/zundamon-jarvis/`。
+Windows は `%APPDATA%\zundamon-jarvis\config.toml`。
+ログは Linux が `~/.local/state/zundamon-jarvis/`、Mac が `~/Library/Logs/zundamon-jarvis/`、Windows が `%LOCALAPPDATA%\zundamon-jarvis\logs\`。
 
 ## Linux
 
@@ -201,6 +257,8 @@ Mac ではメニューバーのアイコンが状態を表し、メニューか�
 ## うまくいかないとき
 
 - Mac で反応しない: システム設定 > プライバシーとセキュリティ > マイク で **python3.12** をオンにする。
+- Windows で反応しない: 設定 > プライバシーとセキュリティ > マイク で「**デスクトップ アプリがマイクにアクセスできるようにする**」をオンにする。
+  ログイン後に動いていないときは `zundamon-jarvis service status` と `%LOCALAPPDATA%\zundamon-jarvis\logs\` のログを見る。
 - ログインしていない: ターミナルで `claude` を実行してログインする。
 - 自分の声を拾う: ヘッドホンを使う（Linux は任意のエコーキャンセルも可）。
 - それ以外: `zundamon-jarvis doctor` の出力を添えて Issue へ。

@@ -6,6 +6,11 @@
   ``ZundamonJarvis — <name>`` and found by that title to close it.
 * Any other Linux: ``$TERMINAL``, ``xdg-terminal-exec``, ``x-terminal-emulator`` in that order
   (opening only; there is no way to find the window again).
+* Windows: a new Windows Terminal window (``wt -w new``) whose title is pinned to
+  ``ZundamonJarvis — <name>`` (``--suppressApplicationTitle``), found again by that title
+  (``FindWindowW``) and closed with ``WM_CLOSE``. Without Windows Terminal (older Windows 10) the
+  command gets a classic console of its own (``CREATE_NEW_CONSOLE``); the program inside retitles
+  that one, so it is opening only.
 """
 
 import json
@@ -120,20 +125,65 @@ def _generic_terminal() -> list[str] | None:
     return None
 
 
+# ---- Windows ----
+
+# subprocess only defines these on Windows
+CREATE_NEW_CONSOLE = 0x00000010
+WM_CLOSE = 0x0010
+
+
+def _spawn_windows(cmd: list[str], creationflags: int = 0) -> None:
+    # No std handles: given any, a new console's program would write to ours (a log file under the tray).
+    subprocess.Popen(cmd, creationflags=creationflags, close_fds=True)
+
+
+def _find_window(title: str) -> int:
+    import ctypes
+
+    return int(ctypes.windll.user32.FindWindowW(None, title) or 0)  # type: ignore[attr-defined]
+
+
+def _close_window(hwnd: int) -> None:
+    import ctypes
+
+    ctypes.windll.user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)  # type: ignore[attr-defined]
+
+
+def _toggle_windows(name: str, argv: list[str], spawn: Callable[..., Any],
+                    find_window: Callable[[str], int], close_window: Callable[[int], Any]) -> None:
+    title = _title(name)
+    hwnd = find_window(title)
+    if hwnd:
+        close_window(hwnd)
+        return
+    wt = shutil.which("wt")
+    if wt:
+        spawn([wt, "-w", "new", "new-tab", "--title", title, "--suppressApplicationTitle", *argv])
+    else:
+        spawn(argv, creationflags=CREATE_NEW_CONSOLE)
+
+
 def toggle_window(
     name: Literal["watch", "settings"],
     argv: list[str],
     system: str | None = None,
     run: Callable[..., Any] = subprocess.run,
-    spawn: Callable[[list[str]], Any] = _spawn_detached,
+    spawn: Callable[..., Any] | None = None,
+    find_window: Callable[[str], int] = _find_window,
+    close_window: Callable[[int], Any] = _close_window,
 ) -> None:
     """Toggle window ``name`` running ``argv`` (absolute command + args) for this desktop.
 
     With no terminal available (generic Linux) prints the command to run and exits 1.
     """
-    if (system or platform.system()) == "mac":
+    sys_ = system or platform.system()
+    if sys_ == "mac":
         _toggle_mac(name, argv, run)
         return
+    if sys_ == "windows":
+        _toggle_windows(name, argv, spawn or _spawn_windows, find_window, close_window)
+        return
+    spawn = spawn or _spawn_detached
     if _hyprland():
         _toggle_hyprland(CLASSES[name], argv, run, spawn)
         return
