@@ -5,14 +5,16 @@ not running -> what to draw); `run_menubar` draws it with rumps (macOS arm64 onl
 Quitting closes only the menu bar app; the daemon (LaunchAgent) keeps running.
 
 The Windows tray icon (``zundamon_jarvis.tray``) draws the same model: ``menu_model(status,
-"windows")`` only swaps the quit label and the OS-specific microphone advice.
+"windows")`` only swaps the quit label and the OS-specific microphone advice. Labels are in the
+display language (``zundamon_jarvis.i18n``), read on every draw: a change in the settings
+window shows within one poll.
 """
 
 import threading
 from dataclasses import dataclass, field
 
-from zundamon_jarvis import ctl
-from zundamon_jarvis.control import request
+from zundamon_jarvis import ctl, i18n
+from zundamon_jarvis.control import request, status_label
 
 POLL_S = 2
 REQUEST_TIMEOUT_S = 1.0
@@ -20,14 +22,40 @@ REQUEST_TIMEOUT_S = 1.0
 TITLE_ICON = {**ctl.STATE_ICON, "thinking": "⏳", "speaking": "🔊"}
 DOWN_ICON = "💤"
 
-# The daemon is uv's python3.12 (a LaunchAgent), and that is the name macOS lists.
-MIC_NOTE = ("マイクが使えません。システム設定 > プライバシーとセキュリティ > マイク で、"
-            "「python3.12」をオンにしてください")
-# Windows lists plain Win32 programs only under the "desktop apps" switch, not one by one.
-WIN_MIC_NOTE = ("マイクが使えません。設定 > プライバシーとセキュリティ > マイク で、"
-                "「デスクトップ アプリがマイクにアクセスできるようにする」をオンにしてください")
-QUIT_LABEL = {"mac": "Quit menu bar (daemon keeps running)", "windows": "Quit tray (daemon keeps running)"}
-LOGIN_NOTE = "Claude にログインしていません。ターミナルで `claude` を実行してログインしてください"
+TEXT = {
+    "not_running": {"ja": "停止中", "en": "Not running"},
+    "pause": {"ja": "一時停止", "en": "Pause"},
+    "resume": {"ja": "再開", "en": "Resume"},
+    "conversation": {"ja": "会話…", "en": "Conversation…"},
+    "settings": {"ja": "設定…", "en": "Settings…"},
+    "quit.mac": {"ja": "メニューバーを終了（本体は動き続けます）", "en": "Quit menu bar (daemon keeps running)"},
+    "quit.windows": {"ja": "トレイを終了（本体は動き続けます）", "en": "Quit tray (daemon keeps running)"},
+    # The daemon is uv's python3.12 (a LaunchAgent), and that is the name macOS lists.
+    "mic.mac": {
+        "ja": "マイクが使えません。システム設定 > プライバシーとセキュリティ > マイク で、「python3.12」をオンにしてください",
+        "en": "The mic is blocked. Turn on “python3.12” in System Settings > Privacy & Security > Microphone",
+    },
+    # Windows lists plain Win32 programs only under the "desktop apps" switch, not one by one.
+    "mic.windows": {
+        "ja": ("マイクが使えません。設定 > プライバシーとセキュリティ > マイク で、"
+               "「デスクトップ アプリがマイクにアクセスできるようにする」をオンにしてください"),
+        "en": ("The mic is blocked. In Settings > Privacy & security > Microphone, "
+               "turn on “Let desktop apps access your microphone”"),
+    },
+    "login": {
+        "ja": "Claude にログインしていません。ターミナルで `claude` を実行してログインしてください",
+        "en": "Not signed in to Claude. Run `claude` in a terminal to sign in",
+    },
+}
+
+
+def _mic_blocked(status: dict) -> bool:
+    if status.get("state") != "offline":
+        return False
+    reasons = status.get("reasons")
+    if isinstance(reasons, list):
+        return "mic" in reasons
+    return "mic" in str(status.get("text", ""))  # a daemon from before "reasons"
 
 
 _UNSET = object()  # nothing polled yet
@@ -47,27 +75,34 @@ class MenuModel:
     note: str | None = None
 
 
-def menu_model(status: dict | None, system: str = "mac") -> MenuModel:
-    quit_item = MenuItem(QUIT_LABEL.get(system, QUIT_LABEL["mac"]), "quit")
+def menu_model(status: dict | None, system: str = "mac", lang: str | None = None) -> MenuModel:
+    """What to draw for ``status``, labelled in ``lang`` (default: the display language now)."""
+    lang = lang or i18n.language()
+
+    def t(key: str) -> str:
+        return i18n.text(TEXT, key, lang)
+
+    os_key = "windows" if system == "windows" else "mac"
+    quit_item = MenuItem(t(f"quit.{os_key}"), "quit")
     if status is None:
         return MenuModel(DOWN_ICON, [
-            MenuItem("Not running", None, False),
-            MenuItem("Pause", "pause", False),
-            MenuItem("Conversation…", "conversation", False),
-            MenuItem("Settings…", "settings", False),
+            MenuItem(t("not_running"), None, False),
+            MenuItem(t("pause"), "pause", False),
+            MenuItem(t("conversation"), "conversation", False),
+            MenuItem(t("settings"), "settings", False),
             quit_item,
         ])
-    state, text = status.get("state", ""), status.get("text", "")
+    state = status.get("state", "")
     notes = []
-    if state == "offline" and "mic" in text:
-        notes.append(WIN_MIC_NOTE if system == "windows" else MIC_NOTE)
+    if _mic_blocked(status):
+        notes.append(t(f"mic.{os_key}"))
     if status.get("login") is False:
-        notes.append(LOGIN_NOTE)
+        notes.append(t("login"))
     return MenuModel(TITLE_ICON.get(state, "•"), [
-        MenuItem(text or state, None, False),
-        MenuItem("Resume", "resume") if state == "paused" else MenuItem("Pause", "pause"),
-        MenuItem("Conversation…", "conversation"),
-        MenuItem("Settings…", "settings"),
+        MenuItem(status_label(status, lang) or state, None, False),
+        MenuItem(t("resume"), "resume") if state == "paused" else MenuItem(t("pause"), "pause"),
+        MenuItem(t("conversation"), "conversation"),
+        MenuItem(t("settings"), "settings"),
         quit_item,
     ], "\n".join(notes) or None)
 
