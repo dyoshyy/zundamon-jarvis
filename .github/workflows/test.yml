@@ -1,0 +1,25 @@
+# Unit tests on Windows (the platform there is no developer machine for). Linux and macOS
+# are tested on the developers' own machines; add them here if that changes.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --python 3.12
+      - run: uv run --no-sync python -m pytest -q
+      - name: CLI entry points start
+        run: |
+          uv run --no-sync zundamon-jarvis --version
+          uv run --no-sync zundamon-jarvisctl status; if ($LASTEXITCODE -eq 1) { exit 0 }
