@@ -210,6 +210,8 @@ class SetupSession:
         self.sys = system
         self._clock = clock
         self._lock = threading.RLock()
+        # config.toml is read, changed and replaced: two answers saved at once must not race
+        self._cfg_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._loop.run_forever, name="setup-loop",
                                              daemon=True)
@@ -360,8 +362,9 @@ class SetupSession:
                 raise ValueError("no such microphone")
             device = choices[index][0]
             if device != self.cfg.mic_device:
-                update_config({"mic_device": device}, self.path)
-                self.cfg.mic_device = device
+                with self._cfg_lock:
+                    update_config({"mic_device": device}, self.path)
+                    self.cfg.mic_device = device
         self._run(self._mic_restart(device), 15)
 
     def mic_stop(self) -> None:
@@ -545,14 +548,16 @@ class SetupSession:
             ids = [sid for _, sid in self.voice.choices]
         if speaker_id not in ids:
             raise ValueError("no such voice")
-        wiz.save_voice(speaker_id, self.cfg, self.path)
+        with self._cfg_lock:
+            wiz.save_voice(speaker_id, self.cfg, self.path)
 
     def set_speed(self, value: Any) -> None:
         speed = valid_speed(value)
         if speed is None:
             raise ValueError(f"speed must be a number in {SPEED_MIN:g}..{SPEED_MAX:g}")
-        update_config({"speed": speed}, self.path)
-        self.cfg.speed = speed
+        with self._cfg_lock:
+            update_config({"speed": speed}, self.path)
+            self.cfg.speed = speed
 
     def _voice_view(self) -> dict:
         v = self.voice
@@ -569,14 +574,16 @@ class SetupSession:
 
     def set_knowledge(self, raw: Any) -> None:
         if raw is None or (isinstance(raw, str) and not raw.strip()):
-            wiz.save_knowledge_dir(None, self.cfg, self.path)
+            with self._cfg_lock:
+                wiz.save_knowledge_dir(None, self.cfg, self.path)
             return
         if not isinstance(raw, str):
             raise ValueError("path must be a string")
         folder = wiz.resolve_folder(raw, Path.home())
         if folder is None:
             raise Refused(f"「{raw.strip()}」というフォルダが見つかりません。")
-        wiz.save_knowledge_dir(folder, self.cfg, self.path)
+        with self._cfg_lock:
+            wiz.save_knowledge_dir(folder, self.cfg, self.path)
 
     def pick_folder(self) -> str | None:
         if self.deps.pick_folder is None:
@@ -588,7 +595,8 @@ class SetupSession:
     def set_model(self, model: Any) -> None:
         if model not in MODELS:
             raise ValueError(f"model must be one of {', '.join(MODELS)}")
-        wiz.save_model(model, self.cfg, self.path)
+        with self._cfg_lock:
+            wiz.save_model(model, self.cfg, self.path)
 
     # -- 7. start --
 
@@ -755,7 +763,7 @@ def _authorized(app: App, headers: dict[str, str]) -> bool:
     except http.cookies.CookieError:
         return False
     morsel = jar.get(app.cookie_name())
-    given = headers.get("x-setup-token") or (morsel.value if morsel else "")
+    given = morsel.value if morsel else ""
     return hmac.compare_digest(given.encode(), app.token.encode())
 
 
@@ -955,6 +963,18 @@ def _sigterm_as_interrupt() -> Callable[[], None]:
     return restore
 
 
+def _open_browser(sys_: str, environ: dict | None = None) -> Callable[[str], bool]:
+    """``webbrowser.open``, except on a Linux without a display (an SSH session): there it would
+    run a console browser (lynx, w3m) in this terminal, which cannot show the page and blocks."""
+    import os
+    import webbrowser
+
+    env = os.environ if environ is None else environ
+    if sys_ == "linux" and not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
+        return lambda url: False
+    return webbrowser.open
+
+
 def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system: str | None = None,
             open_browser: Callable[[str], bool] | None = None, out: Callable[..., None] = print,
             port: int = 0) -> int:
@@ -977,9 +997,7 @@ def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system
         out("（ブラウザが使えないときは Ctrl-C で止めて `zundamon-jarvis setup --cli` を実行してください）")
         watcher.start()
         if open_browser is None:
-            import webbrowser
-
-            open_browser = webbrowser.open
+            open_browser = _open_browser(sys_)
         try:
             if not open_browser(app.url()):
                 out("ブラウザを開けませんでした。上の URL を開いてください。")

@@ -635,6 +635,26 @@ def test_run_gui_reports_a_broken_config(tmp_path, world):
     assert "読めません" in lines[0]
 
 
+def test_no_console_browser_without_a_display():
+    assert setup_gui._open_browser("linux", {})("http://127.0.0.1:1/") is False
+    import webbrowser
+
+    assert setup_gui._open_browser("linux", {"WAYLAND_DISPLAY": "wayland-1"}) is webbrowser.open
+    assert setup_gui._open_browser("mac", {}) is webbrowser.open
+
+
+def test_answers_saved_at_once_do_not_lose_each_other(make, tmp_path):
+    s = make()
+    threads = [threading.Thread(target=s.set_speed, args=(1.0 + i / 10,)) for i in range(5)]
+    threads += [threading.Thread(target=s.set_model, args=("opus",))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    cfg = load_config(tmp_path / "config.toml")
+    assert cfg.model == "opus" and cfg.speed == s.cfg.speed
+
+
 def test_main_dispatches(monkeypatch):
     seen = []
     monkeypatch.setattr(setup_gui, "run_gui", lambda: seen.append("gui") or 0)
