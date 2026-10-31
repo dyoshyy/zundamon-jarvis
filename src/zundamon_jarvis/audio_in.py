@@ -13,6 +13,12 @@ macOS (CoreAudio): PULSE_SOURCE is never touched. None opens sounddevice's defau
 name is a CoreAudio input device name, resolved to its PortAudio index by exact match
 (sounddevice's own name lookup matches substrings and gives up on two hits); an int is an index.
 
+Windows: the same as macOS, with MME devices (see ``zundamon_jarvis.mics`` for why MME). None
+opens sounddevice's default input, which is MME's Sound Mapper (MME is PortAudio's default host
+API on Windows), so it follows the Windows default recording device and resamples to 16 kHz;
+a name is an MME input device name; an int is any PortAudio index (one of another host API
+that will not open at 16 kHz falls back to the default, like a missing mic).
+
 ``close()`` never waits on PortAudio: aborting and closing the stream happen on a thread.
 When the audio server goes away (PipeWire restarted) the ALSA backend's capture thread can
 spin forever and that abort never returns; done on the event loop it froze the daemon.
@@ -40,7 +46,7 @@ log = logging.getLogger(__name__)
 
 FRAME_SAMPLES = 512
 # Linux: set mic_device = "zundamon_jarvis_aec_source" in config.toml to use echo cancellation
-# (see deploy/). On a Mac mic_device is a CoreAudio input device name.
+# (see deploy/). On a Mac mic_device is a CoreAudio input device name, on Windows an MME one.
 _MAX_BUFFERED_FRAMES = 500  # ~16 s; the oldest frames are dropped beyond this
 CLOSE_TIMEOUT_S = 5.0
 
@@ -54,7 +60,7 @@ class AudioIn:
         source_names: Callable[[], set[str] | None] | None = None,
         *,
         system: str | None = None,
-        input_index: Callable[[str], int | None] = input_device_index,
+        input_index: Callable[[str], int | None] | None = None,
         on_stuck: Callable[[str], None] = lambda why: None,
         close_timeout_s: float = CLOSE_TIMEOUT_S,
     ) -> None:
@@ -66,7 +72,10 @@ class AudioIn:
         if source_names is None:
             sys_ = self._system
             source_names = lambda: installed_source_names(system=sys_)
-        self._input_index = input_index  # macOS: device name -> PortAudio index
+        if input_index is None:
+            sys_ = self._system
+            input_index = lambda name: input_device_index(name, system=sys_)
+        self._input_index = input_index  # macOS / Windows: device name -> PortAudio index
         self._device = device
         self._rate = rate
         self._factory = stream_factory
@@ -143,7 +152,7 @@ class AudioIn:
         self._stream = stream
 
     def _start(self, device_cfg: str | int | None, callback: Callable[..., None]) -> Any:
-        if self._system == "mac":
+        if self._system in ("mac", "windows"):  # no PipeWire: PortAudio devices directly
             device: str | int | None = device_cfg
             if isinstance(device_cfg, str):
                 device = self._input_index(device_cfg)
