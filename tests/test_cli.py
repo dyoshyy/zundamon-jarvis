@@ -30,14 +30,17 @@ def test_service_and_engine_dispatch(monkeypatch):
 
 def test_setup_doctor_models_uninstall_dispatch(monkeypatch):
     seen = []
+    monkeypatch.setattr("zundamon_jarvis.setup_gui.run_gui", lambda: seen.append(("setup", "gui")) or 0)
     monkeypatch.setattr("zundamon_jarvis.setup_wizard.main", lambda argv: seen.append(("setup", argv)) or 0)
     monkeypatch.setattr("zundamon_jarvis.setup_wizard.uninstall_main", lambda argv: seen.append(("uninstall", argv)) or 0)
     monkeypatch.setattr("zundamon_jarvis.doctor.main", lambda argv: seen.append(("doctor", argv)) or 0)
     monkeypatch.setattr("zundamon_jarvis.stt.download_model", lambda: seen.append(("models", None)) or "/cache/m")
-    for argv in (["setup"], ["doctor"], ["models", "download"], ["uninstall"]):
+    for argv in (["setup"], ["setup", "--cli"], ["doctor"], ["models", "download"], ["uninstall"]):
         assert cli.main(argv) == 0
-    assert [s[0] for s in seen] == ["setup", "doctor", "models", "uninstall"]
+    assert seen[:2] == [("setup", "gui"), ("setup", [])]
+    assert [s[0] for s in seen[2:]] == ["doctor", "models", "uninstall"]
     assert cli.main(["models"]) == 2
+    assert cli.main(["setup", "--bogus"]) == 2
 
 
 def test_models_download_failure_is_reported(monkeypatch, capsys):
