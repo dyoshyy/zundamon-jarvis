@@ -3,9 +3,12 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="install.sh is the POSIX installer (Windows has install.ps1)")
 
 SCRIPT = Path(__file__).resolve().parent.parent / "install.sh"
 TOOLS = ("sed", "awk", "head", "mkdir", "cat", "cp", "basename", "dirname", "rm", "env", "sh")

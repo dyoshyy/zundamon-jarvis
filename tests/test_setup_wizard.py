@@ -98,6 +98,7 @@ def fakes(tmp_path, *, login="ok", peak=0.3, vv=None):
 @pytest.fixture(autouse=True)
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     return tmp_path
 
 
