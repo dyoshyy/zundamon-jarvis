@@ -35,6 +35,8 @@ from pathlib import Path
 from typing import Any
 
 from zundamon_jarvis import platform
+from zundamon_jarvis.service import RUN_KEY as WINDOWS_RUN_KEY
+from zundamon_jarvis.service import RUN_VALUE as WINDOWS_RUN_VALUE
 
 LOG_LINES = 200
 VOICEVOX_LOG_LINES = 50
@@ -43,8 +45,6 @@ VOICEVOX_VERSION_URL = "http://127.0.0.1:50021/version"
 PACKAGES = ("zundamon-jarvis", "claude-agent-sdk", "numpy", "onnxruntime", "sounddevice",
             "httpx", "textual", "faster-whisper", "ctranslate2", "mlx-whisper", "mlx",
             "huggingface-hub", "rumps", "nvidia-cublas-cu12", "nvidia-cudnn-cu12")
-WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-WINDOWS_RUN_VALUE = "ZundamonJarvis"
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # "heard": "…" in JSON and 'heard': '…' in a Python repr; escaped quotes inside are skipped.
@@ -247,7 +247,10 @@ def _log_lines(system: str, logs: Path, run: Callable[..., Any],
                which: Callable[[str], str | None]) -> list[str]:
     lines: list[str] = []
     if system in ("mac", "windows"):
-        for name, n in (("daemon.log", LOG_LINES), ("voicevox.log", VOICEVOX_LOG_LINES)):
+        # the supervisor names the engine's log after its child ("engine"); launchd after the agent
+        files = ((("supervisor.log", LOG_LINES), ("daemon.log", LOG_LINES), ("engine.log", VOICEVOX_LOG_LINES))
+                 if system == "windows" else (("daemon.log", LOG_LINES), ("voicevox.log", VOICEVOX_LOG_LINES)))
+        for name, n in files:
             tail = _tail(logs / name, n)
             lines.append(f"-- {logs / name}（最後の {n} 行） --")
             lines += tail if tail is not None else ["（ありません）"]
