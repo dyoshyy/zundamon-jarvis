@@ -43,6 +43,8 @@
 
 * { box-sizing: border-box; }
 
+[hidden] { display: none !important; }
+
 html, body { margin: 0; }
 
 body {
@@ -200,9 +202,9 @@ pre.mono {
 }
 .btn:hover:not(:disabled) { border-color: var(--green); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: var(--green); border-color: var(--green); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: var(--green-strong); border-color: var(--green-strong); }
-@media (prefers-color-scheme: dark) { .btn-primary { color: #10200c; } }
+/* Dark text on the light green: white on #7cc76b would be too faint to read. */
+.btn-primary { background: var(--green); border-color: var(--green); color: #142910; }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
 .btn-ghost { background: transparent; }
 .btn-small { min-height: 32px; padding: 4px 12px; font-size: 13px; }
 button:focus-visible, input:focus-visible, select:focus-visible, .choice:focus-within {
@@ -324,6 +326,7 @@ ul.tips li { margin: 4px 0; }
 @media (max-width: 760px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto 1fr;
     grid-template-areas: "top" "rail" "stage";
     padding: 12px 16px 24px;
     gap: 12px;

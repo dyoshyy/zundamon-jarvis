@@ -216,7 +216,7 @@
         running: "確かめています…（1 分ほどかかることがあります）",
         ok: "✅ ログインできています",
         limit: "ログインはできています（いまは利用上限です）",
-        login: "ログインできていません",
+        login: "",
       }[st] || "";
       const key = st + "|" + S.login.note;
       if (this.noteKey === key) return;
@@ -224,7 +224,8 @@
       this.note.replaceChildren();
       if (st === "login") {
         this.note.append(banner("err", el("p", { text: S.login.note }),
-          el("p", {}, "ターミナルで ", code("claude"), " と入力して Enter を押し、表示に従ってログインしてください。")));
+          el("p", {}, "ターミナルで ", code("claude"), " と入力して Enter を押し、表示に従ってログインしてから、" +
+            "「もう一度確かめる」を押してください。")));
       } else if (st === "limit") {
         this.note.append(banner("warn", el("p", { text: S.login.note })));
       }

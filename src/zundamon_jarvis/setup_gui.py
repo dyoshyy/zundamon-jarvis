@@ -63,8 +63,7 @@ SILENT_AFTER_S = 3.0  # the meter read nothing but zeros this long: say so
 MAX_BODY = 64 * 1024
 PICK_TIMEOUT_S = 600.0
 
-LOGIN_HELP = ("Claude にログインできていません。ターミナルで `claude` を実行してログインしてから、"
-              "「もう一度確かめる」を押してください。")
+LOGIN_HELP = "Claude にログインできていません（Claude Code が入っていないときも、こうなります）。"
 DEFAULT_MIC_LABEL = "OS の既定のマイク"
 MIC_FALLBACK_NOTE = "選んだマイクが見つからないので、OS の既定のマイクの音を表示しています。"
 START_PENDING = "起動中です。少し待ってから、メニューバー（Windows は通知領域）のアイコンを見てください。"
@@ -932,6 +931,30 @@ def _watch(app: App, server: ThreadingHTTPServer, stop: threading.Event) -> None
     server.shutdown()
 
 
+def _sigterm_as_interrupt() -> Callable[[], None]:
+    """A closed terminal or a kill ends setup like Ctrl-C does: the cleanup still runs (the mic,
+    the engine started for the samples, resuming a daemon setup paused). Returns the undo."""
+    import signal
+
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+
+    def interrupt(_signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    saved = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            sig = getattr(signal, name)
+            saved[sig] = signal.signal(sig, interrupt)
+
+    def restore() -> None:
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+
+    return restore
+
+
 def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system: str | None = None,
             open_browser: Callable[[str], bool] | None = None, out: Callable[..., None] = print,
             port: int = 0) -> int:
@@ -946,6 +969,7 @@ def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system
     server = make_server(app, port)
     stop = threading.Event()
     watcher = threading.Thread(target=_watch, args=(app, server, stop), name="setup-watch", daemon=True)
+    restore_signals = _sigterm_as_interrupt()
     try:
         session.open()
         out("設定の画面をブラウザで開きます。開かないときは、次の URL をブラウザに貼り付けてください:")
@@ -968,6 +992,7 @@ def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system
         stop.set()
         server.server_close()
         session.close()
+        restore_signals()
     if session.started:
         out(f"設定が終わりました。設定ファイル: {wiz._tilde(path)}")
         return 0
