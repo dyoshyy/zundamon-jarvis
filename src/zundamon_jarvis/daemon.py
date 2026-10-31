@@ -13,7 +13,8 @@ Mic (AudioIn) -> SileroVad -> Endpointer -> Orchestrator, plus the control socke
   same kind of stall (a webcam mic can keep delivering frames of zeros until it is reopened);
   a settings preview's deliberate mute is exempt, and a quiet room (tiny non-zero noise) never trips it.
 - Half duplex (``duplex`` in the config; ``auto`` = a Mac playing through its built-in speakers,
-  re-checked each time ZundamonJarvis starts speaking): while it is saying something, mic frames
+  or Windows playing through anything but headphones / a headset / earbuds, since nothing there
+  cancels the echo; re-checked each time ZundamonJarvis starts speaking): while it is saying something, mic frames
   are read but go nowhere (no VAD, no endpointer, so no barge-in); HALF_DUPLEX_TAIL_S after it
   stops (the echo tail; a gap between streamed sentences stays muted) the endpointer and the
   VAD are reset once. Dropped frames still count as arrived (watchdog) and never as digital
@@ -58,7 +59,7 @@ import numpy as np
 from zundamon_jarvis import control, platform
 from zundamon_jarvis.diag import RateLimitedLog, Window
 from zundamon_jarvis.endpoint import SpeechStarted, Utterance
-from zundamon_jarvis.mics import output_is_builtin_speaker
+from zundamon_jarvis.mics import output_is_builtin_speaker, output_is_headphones
 
 log = logging.getLogger(__name__)
 
@@ -546,15 +547,18 @@ class Daemon:
 
 def duplex_check(
     duplex: str, system: str, builtin_speaker: Callable[[str], bool] = output_is_builtin_speaker,
+    headphones: Callable[[str], bool] = output_is_headphones,
 ) -> Callable[[], bool] | None:
     """The daemon's ``half_duplex``: None for full duplex, else asked as speaking starts."""
     if duplex == "full":
         return None
     if duplex == "half":
         return lambda: True
-    if system != "mac":  # auto on Linux: full duplex, as it always was
-        return None
-    return lambda: builtin_speaker(system)
+    if system == "mac":
+        return lambda: builtin_speaker(system)
+    if system == "windows":  # no echo cancellation: full duplex only when it plays into ears
+        return lambda: not headphones(system)
+    return None  # auto on Linux: full duplex, as it always was
 
 
 class TtsWatch:

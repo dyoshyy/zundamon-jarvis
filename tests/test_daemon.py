@@ -1220,6 +1220,27 @@ def test_duplex_auto_uses_builtin_speaker_detection():
     assert seen == ["mac"]  # "half" / "full" never ask
 
 
+def test_duplex_auto_on_windows_is_half_unless_the_output_is_headphones():
+    seen = []
+
+    def headphones(system):
+        seen.append(system)
+        return seen[-1] == "windows" and len(seen) > 1
+
+    def no_mac(system):
+        raise AssertionError("no Mac speaker detection on Windows")
+
+    check = duplex_check("auto", "windows", builtin_speaker=no_mac, headphones=headphones)
+    assert check is not None
+    assert check() is True  # speakers (or unknown): half duplex
+    assert check() is False  # headphones now: full duplex, asked again each time
+    assert seen == ["windows", "windows"]
+    assert duplex_check("full", "windows", headphones=headphones) is None
+    assert duplex_check("half", "windows", headphones=lambda s: True)() is True
+    assert duplex_check("auto", "linux", headphones=no_mac) is None
+    assert duplex_check("auto", "mac", builtin_speaker=lambda s: False, headphones=no_mac)() is False
+
+
 async def test_full_duplex_unchanged_on_linux(parts):
     def boom(system):
         raise AssertionError("no speaker detection on Linux")
