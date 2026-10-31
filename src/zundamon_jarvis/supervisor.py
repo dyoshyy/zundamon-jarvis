@@ -7,7 +7,10 @@ the ``Run`` registry key (``zundamon_jarvis.service``) starts ``zundamon-jarvisw
 login, and it starts and watches three children:
 
 * ``engine``: the VOICEVOX engine (DirectML build, ``--use_gpu``); always restarted, like the
-  macOS agent (``KeepAlive``) -- nothing but the supervisor is meant to stop it;
+  macOS agent (``KeepAlive``) -- nothing but the supervisor is meant to stop it. While something
+  else already listens on its port (the setup's own engine, or one left by a killed supervisor)
+  it is not started, and not counted against the start limit: a second engine could only fail
+  to bind, five times, and give up for good;
 * ``daemon``: ``zundamon-jarvis daemon``, restarted the way ``zundamon-jarvis.service`` does it:
   on failure only (exit 0 is ``zundamon-jarvisctl quit``), never after exit 3 (another daemon
   holds the control endpoint: restarting won't help), 5 s apart, and at most 5 starts in 5 minutes
@@ -35,6 +38,7 @@ and exits. If it is still there after that, the stopper kills its process tree.
 
 import logging
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -54,7 +58,8 @@ STOP_TIMEOUT_S = 60.0  # the daemon's clean shutdown (TimeoutStopSec=60 in zunda
 KILL_GRACE_S = 5.0  # for the children ended without asking
 STOPPER_SLACK_S = 15.0  # the stopper waits this much longer than the supervisor waits for the daemon
 LOG_MAX_BYTES = 10 * 1024 * 1024  # one older generation (<name>.log.1) is kept
-ENGINE_ARGS = ("--host", "127.0.0.1", "--port", "50021", "--use_gpu")
+ENGINE_HOST, ENGINE_PORT = "127.0.0.1", 50021
+ENGINE_ARGS = ("--host", ENGINE_HOST, "--port", str(ENGINE_PORT), "--use_gpu")
 
 LOCK, PID, STOP = "supervisor.lock", "supervisor.pid", "supervisor.stop"
 
@@ -83,6 +88,8 @@ class ChildSpec:
     name: str
     argv: list[str]
     policy: Policy
+    # True while another process already does this child's job: check again after policy.delay_s
+    served_elsewhere: Callable[[], bool] | None = None
 
 
 class Proc(Protocol):
@@ -99,6 +106,7 @@ class _Child:
     starts: deque[float] = field(default_factory=deque)
     next_start: float = 0.0
     done: bool = False  # stays down: a clean exit, a prevented status, the start limit, or shutdown
+    deferred: bool = False  # served elsewhere (said once in the log)
 
 
 class Supervisor:
@@ -137,7 +145,7 @@ class Supervisor:
                 c.proc = None
                 if c.spec.policy.restarts_after(code):
                     c.next_start = now + c.spec.policy.delay_s
-                    log.warning("%s exited with %s; restarting in %.0f s", c.spec.name, code,
+                    log.warning("%s exited with %s; restarting in %g s", c.spec.name, code,
                                 c.spec.policy.delay_s)
                 else:
                     c.done = True
@@ -147,6 +155,13 @@ class Supervisor:
 
     def _start(self, c: _Child, now: float) -> None:
         p = c.spec.policy
+        if c.spec.served_elsewhere is not None and c.spec.served_elsewhere():
+            if not c.deferred:
+                log.info("%s: another one is already running; starting ours when it is gone", c.spec.name)
+            c.deferred = True
+            c.next_start = now + p.delay_s
+            return
+        c.deferred = False
         while c.starts and now - c.starts[0] >= p.interval_s:
             c.starts.popleft()
         if len(c.starts) >= p.burst:
@@ -213,10 +228,20 @@ def child_specs(system: str, exe: str) -> list[ChildSpec]:
     from zundamon_jarvis import engine
 
     return [
-        ChildSpec("engine", [str(engine.run_path(system)), *ENGINE_ARGS], Policy(restart="always")),
+        ChildSpec("engine", [str(engine.run_path(system)), *ENGINE_ARGS], Policy(restart="always"),
+                  served_elsewhere=engine_port_taken),
         ChildSpec("daemon", [exe, "daemon"], Policy(prevent=frozenset({EXIT_ALREADY_RUNNING}))),
         ChildSpec("tray", [exe, "tray"], Policy()),
     ]
+
+
+def engine_port_taken(timeout: float = 0.5) -> bool:
+    """Something accepts connections on the engine's port (only asked while ours is not running)."""
+    try:
+        with socket.create_connection((ENGINE_HOST, ENGINE_PORT), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def child_env(environ: dict[str, str] | None = None) -> dict[str, str]:

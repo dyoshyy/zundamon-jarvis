@@ -55,7 +55,8 @@ class Spawner:
 
 def make(fail=()):
     clock, spawn = Clock(), Spawner(fail)
-    specs = supervisor.child_specs("windows", r"C:\zj\zundamon-jarvis.exe")
+    specs = [ChildSpec(s.name, s.argv, s.policy)  # no port probe: nothing real listens in tests
+             for s in supervisor.child_specs("windows", r"C:\zj\zundamon-jarvis.exe")]
     return Supervisor(specs, spawn, clock), clock, spawn
 
 
@@ -162,6 +163,36 @@ def test_a_missing_engine_counts_as_failed_starts():
         clock.t += 5
     assert sup.state("engine") == "stopped"
     assert spawn.names().count("daemon") == 1  # the rest still run
+
+
+def test_an_engine_already_listening_is_waited_out_without_counting():
+    taken = [True]
+    clock, spawn = Clock(), Spawner()
+    spec = ChildSpec("engine", ["run.exe"], Policy(restart="always"), served_elsewhere=lambda: taken[0])
+    sup = Supervisor([spec], spawn, clock)
+    for _ in range(100):  # far past the start limit
+        sup.tick()
+        clock.t += 5
+    assert spawn.names() == [] and sup.state("engine") == "waiting"
+    taken[0] = False
+    sup.tick()
+    assert spawn.names() == ["engine"]
+
+
+def test_engine_spec_checks_the_port():
+    engine = supervisor.child_specs("windows", "zj.exe")[0]
+    assert engine.served_elsewhere is supervisor.engine_port_taken
+
+
+def test_engine_port_probe(monkeypatch):
+    import socket
+
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen()
+        monkeypatch.setattr(supervisor, "ENGINE_PORT", srv.getsockname()[1])
+        assert supervisor.engine_port_taken()
+    assert not supervisor.engine_port_taken()  # closed now
 
 
 def test_shutdown_quits_the_daemon_first_then_ends_the_rest():
