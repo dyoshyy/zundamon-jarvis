@@ -194,3 +194,11 @@ def test_dragging_follows_the_pointer_on_the_screen():
     # pointer moved 30 right, 10 down: the right / bottom margins shrink by as much
     assert drag_target((100, 200), (500.0, 400.0), (530.0, 410.0)) == (70.0, 190.0)
     assert drag_target((100, 200), (500.0, 400.0), (500.0, 400.0)) == (100.0, 200.0)
+
+
+def test_bubble_note_follows_the_display_language():
+    from zundamon_jarvis.character import bubble_note
+
+    assert bubble_note(True, "en") == "Speech bubble: on"
+    assert bubble_note(False, "ja") == "吹き出し: オフ"
+    assert bubble_note(True) == "吹き出し: オン"  # the tests' display language

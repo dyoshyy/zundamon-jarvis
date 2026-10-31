@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from zundamon_jarvis import platform
+from zundamon_jarvis import i18n, platform
 
 STATES = ("listening", "thinking", "speaking", "paused", "limit", "offline")
 BLINK_PERIOD_S = 4.0
@@ -155,6 +155,7 @@ class Bubble:
     def note(self, text: str, now: float) -> None:
         self._set(Line("note", text), now, until=now + NOTE_S)
 
+
     def show(self, state: str, now: float) -> Line | None:
         if state in _BUSY:
             self._busy_at = now
@@ -165,6 +166,17 @@ class Bubble:
         if now > end:
             self._set(None, now)
         return self._line
+
+
+TEXT = {  # the overlay's own notes (what is heard and said is shown as it is)
+    "bubble.on": {"ja": "吹き出し: オン", "en": "Speech bubble: on"},
+    "bubble.off": {"ja": "吹き出し: オフ", "en": "Speech bubble: off"},
+}
+
+
+def bubble_note(on: bool, lang: str | None = None) -> str:
+    """The note shown when a right-click switches the speech bubble, in the display language."""
+    return i18n.text(TEXT, "bubble.on" if on else "bubble.off", lang)
 
 
 # ---- moving it around, and remembering where ----
