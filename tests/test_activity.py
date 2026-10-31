@@ -32,8 +32,12 @@ def test_tool_use_becomes_a_label_never_the_input():
     f, sink = feed()
     f.brain_event(ToolUse("Write", {"file_path": "/a/memo.md", "content": "秘密"}, None))
     f.brain_event(ToolUse("Read", {"file_path": "/a/x.md"}, "toolu_agent"))
-    assert sink == [("tool", {"label": "📝 Save note: memo.md", "sub": False}),
-                    ("tool", {"label": "📖 Read file: x.md", "sub": True})]
+    assert sink == [
+        ("tool", {"label": "📝 Save note: memo.md", "labels": {"ja": "📝 メモを保存: memo.md", "en": "📝 Save note: memo.md"},
+                  "sub": False}),
+        ("tool", {"label": "📖 Read file: x.md", "labels": {"ja": "📖 ファイルを読む: x.md", "en": "📖 Read file: x.md"},
+                  "sub": True}),
+    ]
     assert "秘密" not in repr(sink)
 
 
@@ -72,7 +76,7 @@ def test_state_is_compact_busy_states_are_not_published():
 def test_offline_state_shows_its_reason():
     f, sink = feed(reasons=("mic",))
     f.state("offline")
-    assert sink == [("state", {"state": "offline", "text": "Offline (mic)"})]
+    assert sink == [("state", {"state": "offline", "text": "Offline (mic)", "reasons": ["mic"]})]
 
 
 def test_a_failing_sink_never_raises():
