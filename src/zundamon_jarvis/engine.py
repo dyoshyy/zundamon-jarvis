@@ -1,4 +1,10 @@
-"""Pinned, checksummed install of the VOICEVOX engine (Linux NVIDIA / macOS arm64)."""
+"""Pinned, checksummed install of the VOICEVOX engine (Linux NVIDIA / macOS arm64 / Windows x64).
+
+Linux and macOS get the ``.7z`` archives, unpacked with bsdtar (libarchive). Windows gets the
+DirectML ``.vvpp``: DirectML runs on any DirectX 12 GPU (NVIDIA, AMD, Intel) and falls back to
+the CPU, so one build fits every PC, and it is a single file. A ``.vvpp`` is a plain ZIP (with
+``run.exe`` at its root), so the stdlib ``zipfile`` unpacks it: nothing to install first.
+"""
 
 import hashlib
 import os
@@ -6,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -39,7 +46,15 @@ ENGINE: dict = {
             "3a74cf1bdef6b415f2acf7501f50b43e8d1ebcff85b923f693a7c4a60734d943",
         ),
     ),
+    "windows": (  # 1936066614 bytes
+        (
+            f"{_BASE}/voicevox_engine-windows-directml-0.26.0.vvpp",
+            "7c2f85dfb88160c902297e5d7002ce781a48167e7f28def7a1f10f11390f9bec",
+        ),
+    ),
 }
+
+ZIP_SUFFIXES = (".vvpp", ".zip")
 
 MARKER = ".zundamon-engine-version"
 
@@ -67,7 +82,19 @@ def run_path(system: str, dest: Path | None = None) -> Path:
 
 
 def tar_command(system: str) -> str:
-    return "/usr/bin/tar" if system == "mac" else "bsdtar"
+    """The archiver for the .7z builds (Windows' .vvpp never needs one: see ``extract_archive``)."""
+    if system == "mac":
+        return "/usr/bin/tar"
+    return "tar" if system == "windows" else "bsdtar"
+
+
+def _is_zip(parts: Sequence[Path]) -> bool:
+    return len(parts) == 1 and Path(parts[0]).suffix.lower() in ZIP_SUFFIXES
+
+
+def _no_window() -> dict:
+    """Windows: no console window flashes up when a GUI process (pythonw) runs the engine."""
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 def fetch_url(url: str, dest: Path, report: Callable[[int, int | None], None] | None = None) -> None:
@@ -94,8 +121,17 @@ def sha256_file(path: Path) -> str:
 
 
 def extract_archive(parts: Sequence[Path], into: Path, tar: str) -> None:
-    """Concatenate the verified parts into one .7z (libarchive's 7z reader needs random access,
-    so it cannot be streamed), extract it, then delete it."""
+    """A single .vvpp/.zip is unpacked with ``zipfile`` (which strips drive letters, leading
+    slashes and ``..`` from member paths) and deleted. Otherwise concatenate the verified parts
+    into one .7z (libarchive's 7z reader needs random access, so it cannot be streamed), extract
+    it with ``tar``, then delete it."""
+    if _is_zip(parts):
+        try:
+            with zipfile.ZipFile(parts[0]) as z:
+                z.extractall(into)
+        finally:
+            Path(parts[0]).unlink(missing_ok=True)
+        return
     joined = Path(into).parent / "engine.7z"
     try:
         with open(joined, "wb") as out:
@@ -110,16 +146,30 @@ def extract_archive(parts: Sequence[Path], into: Path, tar: str) -> None:
 
 def check_runs(run: Path) -> None:
     # The engine's argparse has no --version; --help exits 0 once the binary and its libs load.
-    subprocess.run([str(run), "--help"], check=True, capture_output=True, timeout=120)
+    subprocess.run([str(run), "--help"], check=True, capture_output=True, timeout=120,
+                   **_no_window())
 
 
-def _installed(dest: Path) -> bool:
-    run = dest / "run"
-    if not (run.is_file() and os.access(run, os.X_OK)):
+def _installed(dest: Path, system: str) -> bool:
+    run = dest / run_name(system)
+    # Windows has no execute bit (os.access X_OK is true for any file there): run.exe existing is it.
+    if not (run.is_file() and (system == "windows" or os.access(run, os.X_OK))):
         return False
     marker = dest / MARKER
     # An install made before pinning has no marker: keep it rather than re-download ~3 GB.
     return not marker.exists() or marker.read_text().strip() == ENGINE["version"]
+
+
+def archive_root(out: Path, system: str) -> Path:
+    """The engine directory in an unpacked archive: ``out`` itself (the .vvpp has ``run.exe`` at
+    its root) or its only top-level folder (the .7z builds)."""
+    name = run_name(system)
+    tops = list(out.iterdir())
+    if not (out / name).is_file() and len(tops) == 1 and tops[0].is_dir():
+        out = tops[0]
+    if not (out / name).is_file():
+        raise RuntimeError(f"extracted archive has no `{name}` executable")
+    return out
 
 
 def _swap_in(new: Path, dest: Path, tmp: Path) -> None:
@@ -153,7 +203,7 @@ def install_engine(
     """Download, verify and unpack the pinned engine into ``dest`` (nothing to do when it is
     there already). With ``progress`` the download goes ``fetch(url, path, report)``."""
     dest = Path(dest) if dest else default_dest(system)
-    if _installed(dest):
+    if _installed(dest, system):
         print(f"VOICEVOX engine {ENGINE['version']} already installed: {dest}")
         return dest
     if flavor == "linux-cpu" and system != "linux":
@@ -187,13 +237,10 @@ def install_engine(
         # extract_archive owns part cleanup (parts may already be gone)
         for f in files:
             f.unlink(missing_ok=True)
-        tops = [p for p in out.iterdir()]
-        root = tops[0] if len(tops) == 1 and tops[0].is_dir() else out
-        if not (root / "run").is_file():
-            raise RuntimeError("extracted archive has no `run` executable")
+        root = archive_root(out, system)
         if progress is not None:
             progress("check", 0, 0)
-        check(root / "run")
+        check(root / run_name(system))
         (root / MARKER).write_text(ENGINE["version"])
         _swap_in(root, dest, tmp)
     finally:

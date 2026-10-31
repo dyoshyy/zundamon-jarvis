@@ -197,3 +197,102 @@ def test_progress_single_part_knows_the_total(tmp_path, monkeypatch):
     engine.install_engine("mac", tmp_path / "voicevox_engine", fetch=fetch, extract=_extract_ok,
                           check=lambda r: None, progress=lambda *a: seen.append(a))
     assert seen[:2] == [("download", 2, 4), ("download", 4, 4)]
+
+
+# ---- Windows: the DirectML .vvpp, a plain ZIP with run.exe at its root ----
+
+def _vvpp(entries: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in entries.items():
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_windows_pin_is_the_single_directml_vvpp():
+    ((url, sha),) = engine.ENGINE["windows"]
+    assert url.endswith("/0.26.0/voicevox_engine-windows-directml-0.26.0.vvpp")
+    assert sha == "7c2f85dfb88160c902297e5d7002ce781a48167e7f28def7a1f10f11390f9bec"
+
+
+def test_windows_install_unpacks_the_vvpp_with_zipfile(tmp_path, monkeypatch):
+    blob = _vvpp({"run.exe": b"MZ", "engine_manifest.json": b"{}",
+                  "engine_internal/lib.dll": b"dll", "../escape.txt": b"no"})
+    url = "http://x/voicevox_engine-windows-directml-0.26.0.vvpp"
+    monkeypatch.setitem(engine.ENGINE, "windows", ((url, _sha(blob)),))
+
+    def no_tar(*a, **kw):
+        raise AssertionError("no tar/7z on Windows")
+
+    monkeypatch.setattr(engine.subprocess, "run", no_tar)
+    checked = []
+    dest = tmp_path / "Local" / "zundamon-jarvis" / "voicevox_engine"
+    engine.install_engine("windows", dest, fetch=_fetch_factory({url: blob}), check=checked.append)
+    assert checked and checked[0].name == "run.exe"
+    assert (dest / "run.exe").read_bytes() == b"MZ"
+    assert (dest / "engine_internal" / "lib.dll").read_bytes() == b"dll"
+    assert (dest / engine.MARKER).read_text() == engine.ENGINE["version"]
+    # zipfile drops ".." from member paths: nothing lands outside the engine directory
+    assert [p.parent for p in tmp_path.rglob("escape.txt")] == [dest]
+    assert [p.name for p in dest.parent.iterdir()] == ["voicevox_engine"]  # .vvpp and tmp gone
+
+
+def test_windows_install_rejects_an_archive_without_run_exe(tmp_path, monkeypatch):
+    blob = _vvpp({"run": b"#!/bin/sh\n"})  # a Linux layout is not a Windows engine
+    url = "http://x/e.vvpp"
+    monkeypatch.setitem(engine.ENGINE, "windows", ((url, _sha(blob)),))
+    dest = tmp_path / "voicevox_engine"
+    with pytest.raises(RuntimeError, match="run.exe"):
+        engine.install_engine("windows", dest, fetch=_fetch_factory({url: blob}),
+                              check=lambda r: None)
+    assert not dest.exists()
+
+
+def test_windows_installed_needs_run_exe_but_no_execute_bit(tmp_path):
+    dest = tmp_path / "voicevox_engine"
+    dest.mkdir()
+    (dest / "run.exe").write_bytes(b"MZ")  # mode 0644: Windows has no execute bit
+    (dest / engine.MARKER).write_text(engine.ENGINE["version"])
+    called = []
+    engine.install_engine("windows", dest, fetch=lambda *a: called.append(a), check=lambda r: None)
+    assert called == []
+    assert not engine._installed(dest, "linux")  # no `run` (and not executable) elsewhere
+
+
+def test_archive_root_finds_run_at_the_root_or_in_one_folder(tmp_path):
+    flat = tmp_path / "flat"
+    flat.mkdir()
+    (flat / "run.exe").write_bytes(b"MZ")
+    (flat / "model").mkdir()
+    assert engine.archive_root(flat, "windows") == flat
+    nested = tmp_path / "nested"
+    (nested / "voicevox_engine").mkdir(parents=True)
+    (nested / "voicevox_engine" / "run").write_text("x")
+    assert engine.archive_root(nested, "linux") == nested / "voicevox_engine"
+    with pytest.raises(RuntimeError, match="run.exe"):
+        engine.archive_root(nested, "windows")
+
+
+def test_extract_archive_still_uses_tar_for_7z_parts(tmp_path, monkeypatch):
+    cmds = []
+    monkeypatch.setattr(engine.subprocess, "run", lambda argv, **kw: cmds.append(argv))
+    part = tmp_path / "e.7z.001"
+    part.write_bytes(b"7z")
+    into = tmp_path / "out"
+    into.mkdir()
+    engine.extract_archive([part], into, "bsdtar")
+    assert cmds and cmds[0][0] == "bsdtar"
+
+
+def test_check_runs_hides_the_console_window_only_where_there_is_one(monkeypatch):
+    seen = []
+    monkeypatch.setattr(engine.subprocess, "run", lambda argv, **kw: seen.append((argv, kw)))
+    engine.check_runs(Path("C:/e/run.exe"))
+    argv, kw = seen[0]
+    assert argv[1:] == ["--help"]
+    assert kw["creationflags"] == getattr(engine.subprocess, "CREATE_NO_WINDOW", 0)
+    monkeypatch.setattr(engine.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    assert engine._no_window() == {"creationflags": 0x08000000}
