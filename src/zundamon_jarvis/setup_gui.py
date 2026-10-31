@@ -462,7 +462,7 @@ class SetupSession:
         except Exception:
             default = None
         out = []
-        for device, label in mic_choices(sources, self.cfg.mic_device):
+        for device, label in mic_choices(sources, self.cfg.mic_device, self.lang):
             if device is None:  # labelled when shown, in the page's language then
                 label = next((s.label for s in sources if s.name == default), default)
             out.append((device, label))

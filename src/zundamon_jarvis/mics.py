@@ -33,11 +33,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from zundamon_jarvis import platform
+from zundamon_jarvis import i18n, platform
 from zundamon_jarvis.config import valid_mic_device
 
 DEFAULT_WORD = "default"  # the control-socket / CLI spelling of "follow the OS default"
-DEFAULT_LABEL = "System default"
+DEFAULT_LABEL = "System default"  # TEXT["default"]["en"]
+TEXT = {  # the labels in the display language (zundamon_jarvis.i18n)
+    "default": {"ja": "システムの既定", "en": DEFAULT_LABEL},
+    "default_named": {"ja": "システムの既定（{name}）", "en": "System default ({name})"},
+    "not_found": {"ja": "{name}（見つかりません）", "en": "{name} (not found)"},
+    "device": {"ja": "デバイス #{index}", "en": "Device #{index}"},
+}
 PACTL_TIMEOUT_S = 3.0
 
 
@@ -295,26 +301,30 @@ def mic_value(device: str | int | None) -> str:
     return DEFAULT_WORD if device is None else str(device)
 
 
-def mic_choices(sources: list[MicSource], current: str | int | None) -> list[tuple[str | int | None, str]]:
+def mic_choices(sources: list[MicSource], current: str | int | None,
+                lang: str | None = None) -> list[tuple[str | int | None, str]]:
     """(device, label) in menu order: the OS default first, then the sources; the current
-    device is kept in the list even if it is not plugged in."""
-    choices: list[tuple[str | int | None, str]] = [(None, DEFAULT_LABEL)]
+    device is kept in the list even if it is not plugged in. Labels in ``lang`` (default: the
+    display language)."""
+    lang = lang or i18n.language()
+    choices: list[tuple[str | int | None, str]] = [(None, i18n.text(TEXT, "default", lang))]
     choices += [(s.name, s.label) for s in sources]
     if current is not None and all(current != d for d, _ in choices):
-        choices.append((current, f"{current} (not found)" if isinstance(current, str)
-                        else f"Device #{current}"))
+        choices.append((current, i18n.text(TEXT, "not_found", lang, name=current) if isinstance(current, str)
+                        else i18n.text(TEXT, "device", lang, index=current)))
     return choices
 
 
 def mic_label(sources: list[MicSource], device: str | int | None,
-              default_name: str | None = None) -> str:
+              default_name: str | None = None, lang: str | None = None) -> str:
     """The menu label; "System default" shows which source it resolves to right now."""
-    label = next(label for d, label in mic_choices(sources, device) if d == device)
+    lang = lang or i18n.language()
     if device is None and default_name:
-        label += f" ({next((s.label for s in sources if s.name == default_name), default_name)})"
-    return label
+        name = next((s.label for s in sources if s.name == default_name), default_name)
+        return i18n.text(TEXT, "default_named", lang, name=name)
+    return next(label for d, label in mic_choices(sources, device, lang) if d == device)
 
 
 def cycle_mic(sources: list[MicSource], current: str | int | None, delta: int) -> str | int | None:
-    devices = [d for d, _ in mic_choices(sources, current)]
+    devices = [d for d, _ in mic_choices(sources, current, "en")]
     return devices[(devices.index(current) + delta) % len(devices)]

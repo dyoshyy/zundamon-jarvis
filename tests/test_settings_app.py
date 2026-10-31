@@ -43,7 +43,7 @@ def test_mic_note():
 
 def test_mic_text_says_system_default_in_the_display_language():
     assert sa.mic_text(MICS, None, "cam", "en") == "System default (Webcam)"
-    assert sa.mic_text(MICS, None, "cam", "ja") == "システムの既定 (Webcam)"
+    assert sa.mic_text(MICS, None, "cam", "ja") == "システムの既定（Webcam）"
     assert sa.mic_text(MICS, "cam", "cam", "ja") == "Webcam"
 
 @pytest.mark.parametrize("speed, delta, want", [

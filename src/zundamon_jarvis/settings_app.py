@@ -66,7 +66,6 @@ from zundamon_jarvis.config import (
 from zundamon_jarvis.control import request as control_request
 from zundamon_jarvis.control import status_label
 from zundamon_jarvis.mics import (
-    DEFAULT_LABEL,
     MicSource,
     cycle_mic,
     default_source_name,
@@ -108,7 +107,6 @@ TEXT = {
     "model.next": {"ja": "次の会話から反映", "en": "applies from the next conversation"},
     "model.stays": {"ja": "この会話は {model} のまま — 「今すぐ切り替え」で反映",
                     "en": "This conversation stays on {model} — use \"Switch now\" to apply"},
-    "mic.default": {"ja": "システムの既定", "en": "System default"},
     "mic.restart": {"ja": "反映するには ZundamonJarvis を再起動してください", "en": "Restart ZundamonJarvis to apply"},
     "mic.switch": {"ja": "←→ で切り替え（ZundamonJarvis の再起動で反映）",
                    "en": "←→ to switch (applies when ZundamonJarvis restarts)"},
@@ -274,11 +272,8 @@ def mic_note(view: View, default_name: str | None = None, lang: str | None = Non
 
 def mic_text(sources: list[MicSource], device: str | int | None, default_name: str | None,
              lang: str | None = None) -> str:
-    """``mics.mic_label`` with "System default" in the display language."""
-    label = mic_label(sources, device, default_name)
-    if device is None and label.startswith(DEFAULT_LABEL):
-        label = _t("mic.default", lang) + label[len(DEFAULT_LABEL):]
-    return label
+    """``mics.mic_label`` in the display language."""
+    return mic_label(sources, device, default_name, lang)
 
 
 # ---- talking to the daemon (or config.toml when it is not running) ----
