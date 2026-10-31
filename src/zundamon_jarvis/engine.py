@@ -57,6 +57,15 @@ def default_dest(system: str) -> Path:
     return platform.data_dir(system) / "voicevox_engine"
 
 
+def run_name(system: str) -> str:
+    """The engine's executable inside its directory."""
+    return "run.exe" if system == "windows" else "run"
+
+
+def run_path(system: str, dest: Path | None = None) -> Path:
+    return (Path(dest) if dest else default_dest(system)) / run_name(system)
+
+
 def tar_command(system: str) -> str:
     return "/usr/bin/tar" if system == "mac" else "bsdtar"
 

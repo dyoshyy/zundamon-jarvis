@@ -178,7 +178,7 @@ async def open_voice_engine(say: Callable[..., None], system: str | None = None,
 
     try:
         ok = await up()
-        run = engine.default_dest(system or platform.system()) / "run"
+        run = engine.run_path(system or platform.system())
         if not ok and run.is_file():
             say("VOICEVOX を起動しています（少しかかります）…")
             proc = subprocess.Popen([str(run), "--host", "127.0.0.1", "--port", "50021"],
