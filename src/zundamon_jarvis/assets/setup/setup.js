@@ -619,7 +619,7 @@
       }
       finished = true;
       clearTimeout(timer);
-      $("step-body").replaceChildren(el("p", { text: "設定を閉じました。このタブは閉じて大丈夫です。" }));
+      $("step-body").replaceChildren(el("p", { text: "設定を閉じました。この画面は閉じて大丈夫です。" }));
       $("back").hidden = true;
       $("next").hidden = true;
       $("nav-hint").textContent = "";

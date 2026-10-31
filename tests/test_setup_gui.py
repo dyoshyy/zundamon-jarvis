@@ -6,6 +6,7 @@ import http.client
 import json
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -700,3 +701,129 @@ def test_demo_deps_build_for_every_os():
     for system in ("mac", "windows", "linux"):
         deps = setup_demo.demo_deps(system)
         assert deps.engine_installed() is False and deps.model_installed() is False
+
+
+# ---- the app window ----
+
+def _visit_and_finish(url):
+    u = urllib.parse.urlsplit(url)
+    c = http.client.HTTPConnection(u.hostname, u.port, timeout=5)
+    c.request("GET", f"{u.path}?{u.query}")
+    r = c.getresponse()
+    r.read()
+    cookie = r.getheader("Set-Cookie").split(";")[0]
+    c.request("POST", "/api/finish", body="{}", headers={"Content-Type": "application/json", "Cookie": cookie})
+    c.getresponse().read()
+
+
+class FakeWindow:
+    """Stands in for AppWindow: run() blocks like webview.start() until close()."""
+
+    def __init__(self, page=None, fail=False):
+        self.page = page
+        self.fail = fail
+        self.closed = threading.Event()
+        self.urls = []
+
+    def run(self, url):
+        self.urls.append(url)
+        if self.fail:
+            raise RuntimeError("no WebView2")
+        if self.page:
+            threading.Thread(target=self.page, args=(url,), daemon=True).start()
+        assert self.closed.wait(10), "the window was never closed"
+
+    def close(self):
+        self.closed.set()
+
+    def pick_folder(self):
+        return "/picked"
+
+
+def test_run_gui_in_a_window_closes_it_when_setup_finishes(tmp_path, world):
+    lines = []
+    win = FakeWindow(page=_visit_and_finish)
+    code = setup_gui.run_gui(world.deps(), config_path=tmp_path / "config.toml", system="windows",
+                             open_browser=lambda url: pytest.fail("no browser with a window"),
+                             out=lines.append, window=win)
+    assert code == 1  # finished without starting the services
+    assert win.closed.is_set() and win.urls[0].startswith("http://127.0.0.1:")
+    assert not any("?t=" in line for line in lines)  # nothing to paste: the window has it
+
+
+def test_closing_the_window_ends_setup(tmp_path, world):
+    win = FakeWindow()
+    threading.Timer(0.3, win.close).start()  # the user closes it
+    code = setup_gui.run_gui(world.deps(), config_path=tmp_path / "config.toml", system="mac",
+                             open_browser=lambda url: pytest.fail("no browser with a window"),
+                             out=lambda *a: None, window=win)
+    assert code == 1
+
+
+def test_the_window_supplies_the_folder_dialog(tmp_path, world):
+    deps = world.deps()
+    win = FakeWindow()
+    threading.Timer(0.3, win.close).start()
+    setup_gui.run_gui(deps, config_path=tmp_path / "config.toml", system="mac", out=lambda *a: None,
+                      window=win)
+    assert deps.pick_folder() == "/picked"
+
+
+def test_no_window_falls_back_to_the_browser(tmp_path, world):
+    lines = []
+    opened = []
+    win = FakeWindow(fail=True)
+
+    def browser(url):
+        opened.append(url)
+        threading.Thread(target=_visit_and_finish, args=(url,), daemon=True).start()
+        return True
+
+    setup_gui.run_gui(world.deps(), config_path=tmp_path / "config.toml", system="windows",
+                      open_browser=browser, out=lines.append, window=win)
+    assert opened and any(opened[0] in line for line in lines)
+
+
+def test_app_window_only_on_mac_and_windows(monkeypatch):
+    assert setup_gui.app_window("linux") is None
+
+    class FakeWebview:
+        pass
+
+    monkeypatch.setitem(sys.modules, "webview", FakeWebview)
+    assert isinstance(setup_gui.app_window("windows"), setup_gui.AppWindow)
+    monkeypatch.setitem(sys.modules, "webview", None)  # not installed
+    assert setup_gui.app_window("mac") is None
+
+
+def test_app_window_drives_pywebview():
+    calls = []
+
+    class Win:
+        def destroy(self):
+            calls.append("destroy")
+
+        def create_file_dialog(self, kind, directory=""):
+            calls.append(("dialog", kind))
+            return ("/Users/me/notes",)
+
+    class Webview:
+        class FileDialog:
+            FOLDER = "folder"
+
+        @staticmethod
+        def create_window(title, url, **kw):
+            calls.append(("create", title, url, kw["width"], kw["height"]))
+            return Win()
+
+        @staticmethod
+        def start():
+            calls.append("start")
+
+    w = setup_gui.AppWindow(Webview)
+    assert w.pick_folder() is None  # no window yet
+    w.run("http://127.0.0.1:1/?t=x")
+    assert w.pick_folder() == "/Users/me/notes"
+    w.close()
+    assert calls == [("create", setup_gui.WINDOW_TITLE, "http://127.0.0.1:1/?t=x", 960, 720), "start",
+                     ("dialog", "folder"), "destroy"]

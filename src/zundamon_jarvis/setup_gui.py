@@ -2,8 +2,11 @@
 
 Why a web page: one UI for macOS, Windows and Linux with nothing new to install. The server is
 the stdlib ``http.server`` inside the setup process, bound to 127.0.0.1 on a free port; the page
-is static HTML/CSS/JS shipped in ``assets/setup/`` (no CDN, no build step) and is opened with
-``webbrowser.open``; the terminal prints the URL in case no browser comes up.
+is static HTML/CSS/JS shipped in ``assets/setup/`` (no CDN, no build step). On macOS and Windows
+it is shown in an app window of its own (pywebview: WKWebView / WebView2, which the OS already
+has), so setup looks like an app rather than a browser tab; closing the window ends setup. On
+Linux, or when no window can be made, ``webbrowser.open`` shows it instead and the terminal
+prints the URL in case no browser comes up.
 
 The steps are the terminal wizard's (``zundamon_jarvis.setup_wizard``, whose step helpers both
 use, so what is saved and said stays the same) plus the two big downloads the installers used to
@@ -920,9 +923,11 @@ def make_server(app: App, port: int = 0) -> ThreadingHTTPServer:
 
 # ---- running it ----
 
-def _watch(app: App, server: ThreadingHTTPServer, stop: threading.Event) -> None:
+def _watch(app: App, server: ThreadingHTTPServer, stop: threading.Event,
+           on_stop: Callable[[], None] = lambda: None) -> None:
     """Stop the server once the page finished, or has been gone a while (never during a
-    download: a closed tab can be opened again from the terminal's URL meanwhile)."""
+    download: a closed tab can be opened again from the terminal's URL meanwhile); then
+    ``on_stop`` (closes the app window)."""
     started = app.clock()
     while not stop.wait(1.0):
         s = app.session
@@ -937,6 +942,8 @@ def _watch(app: App, server: ThreadingHTTPServer, stop: threading.Event) -> None
             log.info("the setup page is gone; stopping")
             break
     server.shutdown()
+    if not stop.is_set():
+        on_stop()
 
 
 def _sigterm_as_interrupt() -> Callable[[], None]:
@@ -975,35 +982,100 @@ def _open_browser(sys_: str, environ: dict | None = None) -> Callable[[str], boo
     return webbrowser.open
 
 
+# ---- the app window (macOS, Windows) ----
+
+WINDOW_TITLE = "ずんだもんジャーヴィスの設定"
+WINDOW_SIZE = (960, 720)
+WINDOW_MIN = (420, 560)
+
+
+class AppWindow:
+    """The setup page in a native window through pywebview (``webview`` is passed in)."""
+
+    def __init__(self, webview: Any) -> None:
+        self._wv = webview
+        self._win: Any = None
+
+    def run(self, url: str) -> None:
+        """Show ``url`` and block (on the main thread: Cocoa needs it) until the window is closed."""
+        w, h = WINDOW_SIZE
+        self._win = self._wv.create_window(WINDOW_TITLE, url, width=w, height=h, min_size=WINDOW_MIN,
+                                           background_color="#121712")
+        self._wv.start()
+
+    def close(self) -> None:
+        if self._win is not None:
+            self._win.destroy()
+
+    def pick_folder(self) -> str | None:
+        """The OS's own folder dialog, on top of the setup window."""
+        if self._win is None:
+            return None
+        kinds = getattr(self._wv, "FileDialog", None)  # pywebview 6; FOLDER_DIALOG before
+        kind = kinds.FOLDER if kinds is not None else self._wv.FOLDER_DIALOG
+        picked = self._win.create_file_dialog(kind, directory=str(Path.home()))
+        if not picked:
+            return None
+        return str(picked[0] if isinstance(picked, (list, tuple)) else picked)
+
+
+def app_window(sys_: str) -> AppWindow | None:
+    """An app window on macOS and Windows; None on Linux (pywebview would need the system's GTK
+    WebKit, which the venv cannot see) or when pywebview is not installed."""
+    if sys_ not in ("mac", "windows"):
+        return None
+    try:
+        import webview
+    except Exception:
+        log.debug("pywebview unavailable", exc_info=True)
+        return None
+    return AppWindow(webview)
+
+
+_DEFAULT: Any = object()
+
+
 def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system: str | None = None,
             open_browser: Callable[[str], bool] | None = None, out: Callable[..., None] = print,
-            port: int = 0) -> int:
+            port: int = 0, window: Any = _DEFAULT) -> int:
     path = config_path or config_mod.CONFIG_PATH
     sys_ = system or platform.system()
     cfg, problem = wiz.read_config(path)
     if cfg is None:
         out(problem)
         return 1
-    session = SetupSession(deps or default_deps(sys_), cfg, path, sys_)
+    if window is _DEFAULT:
+        window = app_window(sys_)
+    deps = deps or default_deps(sys_)
+    if window is not None:
+        deps.pick_folder = window.pick_folder
+    session = SetupSession(deps, cfg, path, sys_)
     app = App(session, secrets.token_urlsafe(24))
     server = make_server(app, port)
     stop = threading.Event()
-    watcher = threading.Thread(target=_watch, args=(app, server, stop), name="setup-watch", daemon=True)
+    on_stop = window.close if window is not None else (lambda: None)
+    watcher = threading.Thread(target=_watch, args=(app, server, stop, on_stop), name="setup-watch",
+                               daemon=True)
     restore_signals = _sigterm_as_interrupt()
     try:
         session.open()
-        out("設定の画面をブラウザで開きます。開かないときは、次の URL をブラウザに貼り付けてください:")
-        out(f"  {app.url()}")
-        out("（ブラウザが使えないときは Ctrl-C で止めて `zundamon-jarvis setup --cli` を実行してください）")
         watcher.start()
-        if open_browser is None:
-            open_browser = _open_browser(sys_)
-        try:
-            if not open_browser(app.url()):
-                out("ブラウザを開けませんでした。上の URL を開いてください。")
-        except Exception:
-            log.debug("webbrowser failed", exc_info=True)
-        server.serve_forever(poll_interval=0.2)
+        if window is not None and _run_window(window, app, server, out):
+            pass  # the window was closed (or setup finished and closed it)
+        else:
+            if window is not None:
+                deps.pick_folder = tk_folder_picker()  # the window's own dialog is gone with it
+            out("設定の画面をブラウザで開きます。開かないときは、次の URL をブラウザに貼り付けてください:")
+            out(f"  {app.url()}")
+            out("（ブラウザが使えないときは Ctrl-C で止めて `zundamon-jarvis setup --cli` を実行してください）")
+            if open_browser is None:
+                open_browser = _open_browser(sys_)
+            try:
+                if not open_browser(app.url()):
+                    out("ブラウザを開けませんでした。上の URL を開いてください。")
+            except Exception:
+                log.debug("webbrowser failed", exc_info=True)
+            server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
         out("\n中断しました。")
     finally:
@@ -1016,6 +1088,26 @@ def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system
         return 0
     out("設定は途中です。もう一度 `zundamon-jarvis setup` を実行すると、続きから設定できます。")
     return 1
+
+
+def _run_window(window: AppWindow, app: App, server: ThreadingHTTPServer,
+                out: Callable[..., None]) -> bool:
+    """Serve on a thread and show the app window on this (the main) thread until it closes.
+    False when no window could be shown (no WebView2, say): the caller falls back to the browser."""
+    serving = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2},
+                               name="setup-http", daemon=True)
+    serving.start()
+    out("設定の画面を開きます（閉じると設定を終えます）。")
+    try:
+        window.run(app.url())
+    except Exception:
+        log.warning("the setup window could not be shown; using the browser", exc_info=True)
+        server.shutdown()
+        serving.join()
+        return False
+    server.shutdown()  # closed by the user: setup ends here (finished or not)
+    serving.join()
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
