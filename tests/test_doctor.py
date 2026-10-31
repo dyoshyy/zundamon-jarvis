@@ -208,3 +208,87 @@ def test_short_names_match_only_whole_words_and_cjk_parts_count(monkeypatch):
     monkeypatch.setattr(doctor.getpass, "getuser", lambda: "taro")
     monkeypatch.setattr(pwd, "getpwuid", lambda uid: type("P", (), {"pw_gecos": "山田 太郎,,,"})())
     assert set(doctor.user_names()) == {"taro", "山田 太郎", "山田", "太郎"}
+
+
+# ---- Windows: no pactl / systemctl / journalctl / launchctl ----
+
+def test_doctor_on_windows_reads_files_registry_and_gpus(home, tmp_path):
+    seen = []
+
+    def run(argv, **kw_):
+        seen.append(argv[0])
+        assert argv[0] in ("powershell", "C:/bin/claude.exe"), argv
+        out = "NVIDIA GeForce RTX 4070\r\nIntel(R) UHD Graphics 770\r\n" if argv[0] == "powershell" \
+            else "2.1.0 (Claude Code)\n"
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    logs = tmp_path / "Local" / "zundamon-jarvis" / "logs"
+    logs.mkdir(parents=True)
+    (logs / "daemon.log").write_text("INFO zundamon_jarvis.daemon: running (listening)\n")
+    lines: list[str] = []
+    assert doctor.run_doctor(lines.append, **kw(
+        home, system="windows", run=run, log_dir=logs,
+        which=lambda n: "C:/bin/claude.exe" if n == "claude" else None,
+        cuda_devices=lambda: 0,
+        autostart=lambda: r'"C:\Users\taro\.local\bin\zundamon-jarvis.exe" supervise')) == 0
+    out = "\n".join(lines)
+    assert "Windows" in out and "GPU: NVIDIA GeForce RTX 4070, Intel(R) UHD Graphics 770" in out
+    assert "CUDA デバイス: 0（音声認識は CPU（int8、遅め））" in out
+    assert "running (listening)" in out  # the daemon log file, not the journal
+    assert r"Run\ZundamonJarvis): " in out and "zundamon-jarvis.exe" in out and "supervise" in out
+    assert "サービス:" not in out  # service_status (systemctl) is not asked
+    assert set(seen) == {"powershell", "C:/bin/claude.exe"}
+
+
+def test_doctor_on_windows_survives_missing_probes(home, tmp_path):
+    def run(argv, **kw_):
+        raise FileNotFoundError(argv[0])
+
+    def no_ct2():
+        raise ImportError("DLL load failed while importing _ext")
+
+    def no_winreg():
+        raise ModuleNotFoundError("No module named 'winreg'")
+
+    lines: list[str] = []
+    assert doctor.run_doctor(lines.append, **kw(
+        home, system="windows", run=run, log_dir=tmp_path / "nope",
+        cuda_devices=no_ct2, autostart=no_winreg)) == 0
+    out = "\n".join(lines)
+    assert "CUDA デバイス: ImportError: DLL load failed" in out
+    assert "GPU: FileNotFoundError" in out
+    assert "読めません（ModuleNotFoundError" in out
+    lines = []
+    doctor.run_doctor(lines.append, **kw(home, system="windows", run=run, log_dir=tmp_path,
+                                         cuda_devices=lambda: 1, autostart=lambda: None))
+    out = "\n".join(lines)
+    assert "登録されていません" in out and "CUDA デバイス: 1（音声認識は CUDA）" in out
+
+
+def test_redact_windows_home_in_every_spelling():
+    home = r"C:\Users\taro"
+    text = "\n".join([r"C:\Users\taro\AppData\Local\zundamon-jarvis\logs",
+                      "C:/Users/taro/notes",
+                      json.dumps({"path": r"C:\Users\taro\x"})])
+    out = doctor.redact(text, home=home)
+    assert "Users" not in out
+    assert out.splitlines() == [r"~\AppData\Local\zundamon-jarvis\logs", "~/notes", r'{"path": "~\\x"}']
+
+
+def test_windows_mic_silence_verdict_points_at_the_privacy_settings():
+    silent = {"frames_last_5s": 156, "max_abs_last_5s": 0.0}
+    assert doctor.mic_verdict(silent, "windows") == doctor.WINDOWS_MIC_SILENT_VERDICT
+    assert "プライバシー" in doctor.WINDOWS_MIC_SILENT_VERDICT
+    assert doctor.mic_verdict(silent) == doctor.mic_verdict(silent, "mac") == doctor.MIC_SILENT_VERDICT
+
+
+def test_windows_user_names_use_the_display_name(monkeypatch):
+    monkeypatch.setattr(doctor.getpass, "getuser", lambda: "taro")
+    monkeypatch.setattr(doctor, "_windows_full_name", lambda: "Taro Yamada")
+    assert set(doctor.user_names("windows")) == {"taro", "Taro Yamada", "Taro", "Yamada"}
+
+    def boom():
+        raise AttributeError("module 'ctypes' has no attribute 'windll'")
+
+    monkeypatch.setattr(doctor, "_windows_full_name", boom)
+    assert doctor.user_names("windows") == ["taro"]
