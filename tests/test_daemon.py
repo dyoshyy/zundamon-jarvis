@@ -375,6 +375,7 @@ async def test_resume_with_a_broken_mic_stays_paused(parts):
     await task
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no POSIX signals on Windows")
 async def test_sigterm_closes_the_session_then_the_audio(parts):
     calls, audio, vad, ep, orch, log = parts
     d = make(parts)
@@ -389,6 +390,7 @@ async def test_sigterm_closes_the_session_then_the_audio(parts):
     assert not asyncio.get_running_loop().remove_signal_handler(signal.SIGTERM)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no POSIX signals on Windows")
 async def test_sigint_also_shuts_down(parts):
     calls, *_ = parts
     d = make(parts)
