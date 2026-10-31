@@ -184,9 +184,12 @@ def _cuda_devices() -> int:
 
 
 def _windows_gpus(run: Callable[..., Any]) -> str:
+    # PowerShell writes to a pipe in the console's (OEM) code page unless told otherwise
     argv = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
             "(Get-CimInstance Win32_VideoController).Name"]
-    out = run(argv, capture_output=True, text=True, timeout=15).stdout or ""
+    out = run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+              timeout=15).stdout or ""
     return ", ".join(line.strip() for line in out.splitlines() if line.strip()) or "?"
 
 
@@ -206,7 +209,7 @@ def _os_lines(system: str, run: Callable[..., Any],
     elif system == "mac":
         ver = std_platform.mac_ver()[0] or "?"
         chip, _ = _try(lambda: run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
-                                   text=True, timeout=5).stdout.strip())
+                                   text=True, encoding="utf-8", errors="replace", timeout=5).stdout.strip())
         lines.append(f"macOS {ver} ({std_platform.machine()})")
         lines.append(f"チップ: {chip or '?'}")
     else:
@@ -232,7 +235,7 @@ def _claude_lines(status: dict | None, which: Callable[[str], str | None],
     lines = [f"claude コマンド: {path or '見つかりません'}"]
     if path:
         ver, err = _try(lambda: run([path, "--version"], capture_output=True, text=True,
-                                    timeout=10).stdout.strip())
+                                    encoding="utf-8", errors="replace", timeout=10).stdout.strip())
         lines.append(f"claude --version: {ver or err}")
     if status is None:
         lines.append("ログイン: 不明（デーモンが動いていません。`zundamon-jarvis setup` で確かめられます）")
@@ -257,7 +260,8 @@ def _log_lines(system: str, logs: Path, run: Callable[..., Any],
     elif which("journalctl"):
         argv = ["journalctl", "--user", "-u", "zundamon-jarvis", "-n", str(LOG_LINES), "--no-pager"]
         lines.append("-- " + " ".join(argv) + " --")
-        out, err = _try(lambda: run(argv, capture_output=True, text=True, timeout=10).stdout)
+        out, err = _try(lambda: run(argv, capture_output=True, text=True, encoding="utf-8",
+                                        errors="replace", timeout=10).stdout)
         lines += (out or err or "").splitlines()
     else:
         lines.append("（journalctl がないのでログは取れません）")
@@ -428,4 +432,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv:
         print("usage: zundamon-jarvis doctor", file=sys.stderr)
         return 2
+    # Redirected on Windows, stdout is in the ANSI code page (cp932, cp1252), which PowerShell and
+    # clip also read; a character it lacks becomes "?" instead of ending the report with an error.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="replace")
     return run_doctor()

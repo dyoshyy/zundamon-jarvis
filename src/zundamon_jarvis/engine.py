@@ -157,7 +157,7 @@ def _installed(dest: Path, system: str) -> bool:
         return False
     marker = dest / MARKER
     # An install made before pinning has no marker: keep it rather than re-download ~3 GB.
-    return not marker.exists() or marker.read_text().strip() == ENGINE["version"]
+    return not marker.exists() or marker.read_text(encoding="utf-8").strip() == ENGINE["version"]
 
 
 def archive_root(out: Path, system: str) -> Path:
@@ -241,7 +241,7 @@ def install_engine(
         if progress is not None:
             progress("check", 0, 0)
         check(root / run_name(system))
-        (root / MARKER).write_text(ENGINE["version"])
+        (root / MARKER).write_text(ENGINE["version"], encoding="utf-8")
         _swap_in(root, dest, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

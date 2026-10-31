@@ -265,7 +265,7 @@ class ClaudeBrain:
             include_partial_messages=True,
             can_use_tool=self._can_use_tool,
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": self._prompt_path.read_text()},
+                           "append": self._prompt_path.read_text(encoding="utf-8")},
         )
 
     async def _ensure_connected(self) -> Any:

@@ -118,7 +118,7 @@ def _install_launcher(home: Path, ctl: str | None) -> None:
     entry.parent.mkdir(parents=True, exist_ok=True)
     icon.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(Path(str(resources.files("zundamon_jarvis") / "assets" / "icon.png")), icon)
-    entry.write_text(desktop_entry(ctl or _find_ctl()))
+    entry.write_text(desktop_entry(ctl or _find_ctl()), encoding="utf-8")
 
 
 def _agents(exe: str, home: Path) -> dict[str, list[str]]:

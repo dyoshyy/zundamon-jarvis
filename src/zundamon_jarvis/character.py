@@ -205,7 +205,7 @@ def prefs_path() -> Path:
 
 def load_prefs(path: Path) -> Prefs:
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return Prefs()
     if not isinstance(raw, dict):
@@ -226,5 +226,5 @@ def save_prefs(path: Path, prefs: Prefs) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps({"right": prefs.right, "bottom": prefs.bottom,
-                               "bubble": prefs.bubble}))
+                               "bubble": prefs.bubble}), encoding="utf-8")
     os.replace(tmp, path)
