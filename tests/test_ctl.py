@@ -4,7 +4,18 @@ from pathlib import Path
 import pytest
 
 from helpers import WINDOWS, endpoint
-from zundamon_jarvis import ctl
+from zundamon_jarvis import ctl, i18n
+
+
+@pytest.fixture(autouse=True)
+def _english(monkeypatch):
+    """These tests read the English lines (the Japanese ones have their own tests below)."""
+    monkeypatch.setattr(i18n, "language", lambda config_path=None: "en")
+
+
+LIVE_LINE = ctl.t("live", "en")
+RESTART_LINE = ctl.t("restarted", "en")
+WAITING_LINE = ctl.t("waiting", "en")
 
 
 def run(monkeypatch, capsys, argv, response=None, error=None):
@@ -90,7 +101,7 @@ def ev(kind, **fields):
     (ev("state", state="paused", text="Paused"), "09:05 ⏸ Paused"),
     (ev("state", state="listening", text="Listening"), "09:05 ▶ Listening"),
     (ev("state", state="limit", text="Limit"), "09:05 ⛔ Limit"),
-    (ev("state", state="offline", text="Offline (mic)"), "09:05 📴 Offline (mic)"),
+    (ev("state", state="offline", text="Offline (mic)", reasons=["mic"]), "09:05 📴 Offline (mic)"),
     (ev("task", status="completed", summary="数え終わった"), "09:05 🧵 Background task finished: 数え終わった"),
     (ev("task", status="failed", summary=""), "09:05 🧵 Background task failed"),
     (ev("task", status="stopped", summary=""), "09:05 🧵 Background task stopped"),
@@ -115,8 +126,8 @@ def test_view_skips_what_it_has_already_shown_after_a_reconnect():
     first = [{"kind": "hello", "boot": "b1"}, {**ev("heard", text="a"), "id": 1},
              {"kind": "live"}, {**ev("heard", text="b"), "id": 2}]
     out = [line for e in first for line in view.feed(e)]
-    assert out == ["09:05 You ▸\n  a", ctl.LIVE_LINE, "09:05 You ▸\n  b"]
-    assert view.disconnected() == ctl.WAITING_LINE
+    assert out == ["09:05 You ▸\n  a", LIVE_LINE, "09:05 You ▸\n  b"]
+    assert view.disconnected() == WAITING_LINE
     assert view.disconnected() is None  # said once while waiting
     again = [{"kind": "hello", "boot": "b1"}, {**ev("heard", text="a"), "id": 1},
              {**ev("heard", text="b"), "id": 2}, {"kind": "live"}, {**ev("heard", text="c"), "id": 3}]
@@ -130,7 +141,7 @@ def test_view_shows_everything_again_after_a_daemon_restart():
     view.disconnected()
     lines = [line for e in [{"kind": "hello", "boot": "b2"}, {**ev("heard", text="new"), "id": 1},
                             {"kind": "live"}] for line in view.feed(e)]
-    assert lines == [ctl.RESTART_LINE, "09:05 You ▸\n  new", ctl.LIVE_LINE]
+    assert lines == [RESTART_LINE, "09:05 You ▸\n  new", LIVE_LINE]
 
 
 async def test_watch_prints_history_then_live_and_waits_when_the_daemon_goes(tmp_path):
@@ -166,7 +177,7 @@ async def test_watch_prints_history_then_live_and_waits_when_the_daemon_goes(tmp
     assert await asyncio.to_thread(done.wait, 2)
     lines = out.getvalue().splitlines()
     assert lines[0][6:] == "You ▸" and lines[1] == "  前の話"
-    assert lines[2:] == [ctl.LIVE_LINE, lines[3], lines[4], lines[5], ctl.WAITING_LINE]
+    assert lines[2:] == [LIVE_LINE, lines[3], lines[4], lines[5], WAITING_LINE]
     assert lines[3].endswith("  📅 Check calendar") and lines[4].endswith("ZundamonJarvis ▸")
     assert lines[5] == "  明日はジムだよ。"
     assert result["code"] == 0 and sleeps == [ctl.RETRY_S]
@@ -182,7 +193,7 @@ def test_watch_without_a_daemon_says_so_and_keeps_waiting(tmp_path):
             raise KeyboardInterrupt
 
     assert ctl.watch(endpoint(tmp_path, "none"), out=out, sleep=fake_sleep, color=False) == 0
-    assert out.getvalue().splitlines() == [ctl.WAITING_LINE]
+    assert out.getvalue().splitlines() == [WAITING_LINE]
     assert len(calls) == 3
 
 
@@ -288,7 +299,7 @@ def test_view_is_busy_only_live_and_until_the_next_event():
     view.feed({"kind": "hello", "boot": "b1"})
     view.feed({**ev("thinking", on=True), "id": 1})
     assert not view.busy  # still replaying history
-    assert view.feed({"kind": "live"}) == [ctl.LIVE_LINE]
+    assert view.feed({"kind": "live"}) == [LIVE_LINE]
     assert view.busy
     assert view.feed({**ev("said", text="やあ", what="reply"), "id": 2}) == ["09:05 ZundamonJarvis ▸\n  やあ"]
     assert not view.busy
@@ -344,3 +355,71 @@ def test_window_command_finds_the_windows_exe_beside_python(tmp_path, monkeypatc
     (tmp_path / "zundamon-jarvisctl.exe").write_text("", encoding="utf-8")
     monkeypatch.setattr(ctl.sys, "executable", str(tmp_path / "python.exe"))
     assert ctl._zundamon_jarvisctl() == str(tmp_path / "zundamon-jarvisctl.exe")
+
+
+# ---- the display language ----
+
+@pytest.mark.parametrize("event, line", [
+    (ev("heard", text="明日の予定は？"), "09:05 あなた ▸\n  明日の予定は？"),
+    (ev("said", text="ジムだよ", what="reply"), "09:05 ずんだもん ▸\n  ジムだよ"),
+    (ev("said", text="いい？", what="question"), "09:05 ❓ 確認: いい？"),
+    (ev("confirm", question="q", ok=False, why="timeout"), "09:05 ⌛ 返事なし → 取り消し"),
+    (ev("tool", label="📖 Read file: x.md", labels={"ja": "📖 ファイルを読む: x.md", "en": "📖 Read file: x.md"},
+        sub=True), "09:05   裏: 📖 ファイルを読む: x.md"),
+    (ev("tool", label="📅 Check calendar", sub=False), "09:05   📅 Check calendar"),  # an older daemon's event
+    (ev("state", state="paused", text="Paused"), "09:05 ⏸ 一時停止中"),
+    (ev("state", state="offline", text="Offline (mic)", reasons=["mic"]), "09:05 📴 オフライン（マイク）"),
+    (ev("task", status="failed", summary=""), "09:05 🧵 バックグラウンドの作業が失敗しました"),
+])
+def test_format_event_in_japanese(event, line):
+    assert ctl.format_event(event, color=False, lang="ja") == line
+
+
+def test_english_tool_lines_pick_the_english_label():
+    e = ev("tool", label="📖 Read file: x.md", labels={"ja": "📖 ファイルを読む: x.md", "en": "📖 Read file: x.md"}, sub=False)
+    assert ctl.format_event(e, lang="en") == "09:05   📖 Read file: x.md"
+
+
+def test_view_follows_a_language_switch_from_the_next_line(monkeypatch):
+    lang = ["en"]
+    monkeypatch.setattr(i18n, "language", lambda config_path=None: lang[0])
+    view = ctl.WatchView(color=False)
+    assert view.feed(ev("heard", text="a")) == ["09:05 You ▸\n  a"]
+    lang[0] = "ja"
+    assert view.feed({**ev("heard", text="b"), "id": 2}) == ["  b"]  # same speaker: no name
+    assert view.feed({"kind": "live"}) == [ctl.t("live", "ja")] == ["──── ここから最新 ────"]
+    assert view.disconnected() == "⏳ ずんだもんジャーヴィスが動いていません。起動を待っています…"
+
+
+def test_fixed_view_language_and_the_spinner():
+    view = ctl.WatchView(color=False, lang="ja")
+    view.feed({"kind": "live"})
+    view.feed(ev("thinking", on=True))
+    out = io.StringIO()
+    ctl.Loader(out, view).tick()
+    assert "ずんだもんが考え中…" in out.getvalue()
+
+
+def test_bar_in_japanese_keeps_its_keys():
+    data = ctl.bar_output({"state": "offline", "text": "Offline (mic)", "reasons": ["mic"]}, "ja")
+    assert set(data) == {"text", "tooltip", "class"} and data["class"] == "offline"
+    assert data["text"].endswith("オフライン（マイク）")
+    assert data["tooltip"] == ("ずんだもんジャーヴィス: オフライン（マイク） — クリック: 会話、右クリック: 設定、"
+                               "SUPER+ALT+J: 一時停止/再開")
+
+
+def test_messages_in_japanese(monkeypatch, capsys):
+    monkeypatch.setattr(i18n, "language", lambda config_path=None: "ja")
+    assert ctl.main(["dance"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("使い方: zundamon-jarvisctl") and "language" in err
+    assert ctl.open_window("nope") == 2
+    assert "知らないウィンドウです: 'nope'" in capsys.readouterr().err
+
+
+def test_status_json_is_not_translated(monkeypatch, capsys):
+    monkeypatch.setattr(i18n, "language", lambda config_path=None: "ja")
+    code, out, _ = run(monkeypatch, capsys, ["status"], {"state": "paused", "text": "Paused"})
+    assert json.loads(out.out) == {"state": "paused", "text": "Paused"}
+    code, out, _ = run(monkeypatch, capsys, ["status"], error=FileNotFoundError())
+    assert json.loads(out.out) == {"state": "off", "text": "Stopped"}
