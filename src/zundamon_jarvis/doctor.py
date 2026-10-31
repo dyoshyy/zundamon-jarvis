@@ -359,6 +359,7 @@ def collect(
     log_dir: Path | None = None,
     cuda_devices: Callable[[], int] = _cuda_devices,
     autostart: Callable[[], str | None] = _windows_autostart,
+    update_line: Callable[[str], str] | None = None,
 ) -> str:
     """The unredacted report."""
     sys_ = system or platform.system()
@@ -370,7 +371,10 @@ def collect(
         out.extend(["", f"== {title} ==", *lines])
 
     section("OS / Python", _os_lines(sys_, run, cuda_devices))
-    section("パッケージ", _package_lines())
+    if update_line is None:
+        from zundamon_jarvis.update import doctor_line as update_line  # the cache only, no network
+    line, err = _try(lambda: update_line(sys_))  # type: ignore[misc]
+    section("パッケージ", [*_package_lines(), line or f"更新: {err}"])
 
     mics, err = _try(mic_names)
     section("マイク", mics or [err or "（見つかりません）"])

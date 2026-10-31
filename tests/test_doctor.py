@@ -298,3 +298,17 @@ def test_windows_user_names_use_the_display_name(monkeypatch):
 
     monkeypatch.setattr(doctor, "_windows_full_name", boom)
     assert doctor.user_names("windows") == ["taro"]
+
+
+def test_doctor_shows_the_update_line_from_the_cache(home):
+    lines: list[str] = []
+    assert doctor.run_doctor(lines.append, **kw(home, update_line=lambda s: f"更新: uv-tool ({s})")) == 0
+    out = "\n".join(lines)
+    assert "更新: uv-tool (mac)" in out
+
+    def broken(s):
+        raise OSError("disk")
+
+    lines.clear()
+    assert doctor.run_doctor(lines.append, **kw(home, update_line=broken)) == 0
+    assert "更新: " in "\n".join(lines)
