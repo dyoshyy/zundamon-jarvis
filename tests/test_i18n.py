@@ -36,3 +36,33 @@ def test_mac_language_from_defaults():
     assert i18n._mac_ui_language(lambda *a, **k: R()) == "en"
     R.stdout = '(\n    "ja-JP"\n)\n'
     assert i18n._mac_ui_language(lambda *a, **k: R()) == "ja"
+
+
+def test_problems_finds_missing_languages_and_mismatched_fields():
+    assert i18n.problems({"ok": {"ja": "{n} 個", "en": "{n} items"}}) == []
+    assert i18n.problems({"k": {"ja": "だけ"}}) == ["k: no en"]
+    assert i18n.problems({"k": {"ja": "{a}", "en": "{b}"}}) == ["k: fields differ: ja=['a'], en=['b']"]
+
+
+def _tables():
+    import importlib
+    import pkgutil
+
+    import zundamon_jarvis
+
+    for info in pkgutil.iter_modules(zundamon_jarvis.__path__):
+        try:
+            module = importlib.import_module(f"zundamon_jarvis.{info.name}")
+        except Exception:  # an OS-only module (GTK, rumps, ...)
+            continue
+        for name, value in vars(module).items():
+            if name == "TEXT" or name.endswith("_TEXT_I18N"):
+                yield f"{info.name}.{name}", value
+
+
+def test_every_text_table_is_complete():
+    """Every module's ``TEXT`` table has Japanese and English, with the same ``{fields}``."""
+    tables = dict(_tables())
+    assert "control.TEXT" in tables
+    bad = {name: p for name, table in tables.items() if (p := i18n.problems(table))}
+    assert bad == {}
