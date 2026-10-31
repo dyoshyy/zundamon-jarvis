@@ -1,3 +1,4 @@
+import sys
 import asyncio
 import tomllib
 from contextlib import asynccontextmanager
@@ -293,6 +294,7 @@ def test_clean_path_input(typed, want):
     assert setup_wizard.clean_path_input(typed, "mac") == want
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="backslash-escaped drops are a macOS/Linux terminal habit")
 async def test_setup_knowledge_dir_accepts_a_dragged_folder(tmp_path, home):
     real = home / "My Notes"
     real.mkdir()
