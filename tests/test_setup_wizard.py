@@ -290,7 +290,7 @@ async def test_setup_reports_a_missing_executable(tmp_path):
     ("~/notes", "~/notes"),
 ])
 def test_clean_path_input(typed, want):
-    assert setup_wizard.clean_path_input(typed) == want
+    assert setup_wizard.clean_path_input(typed, "mac") == want
 
 
 async def test_setup_knowledge_dir_accepts_a_dragged_folder(tmp_path, home):
@@ -425,3 +425,8 @@ def test_save_model_rejects_unknown(tmp_path):
     with pytest.raises(ValueError):
         setup_wizard.save_model("gpt", Config(), tmp_path / "c.toml")
     assert not (tmp_path / "c.toml").exists()
+
+
+def test_clean_path_input_keeps_windows_backslashes():
+    assert setup_wizard.clean_path_input(r"C:\Users\taro\My Notes", "windows") == r"C:\Users\taro\My Notes"
+    assert setup_wizard.clean_path_input(r'"C:\Users\taro\notes"', "windows") == r"C:\Users\taro\notes"

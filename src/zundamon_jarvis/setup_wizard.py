@@ -462,12 +462,15 @@ async def _voice_step(con: Console, cfg: Config, path: Path, engine_cm, play) ->
                 return
 
 
-def clean_path_input(raw: str) -> str:
-    """A path as typed or dragged into Terminal: surrounding quotes removed, or (unquoted)
-    backslash escapes such as ``\\ `` undone."""
+def clean_path_input(raw: str, system: str | None = None) -> str:
+    """A path as typed or dragged into a terminal: surrounding quotes removed, or (unquoted, on
+    macOS and Linux) backslash escapes such as ``\\ `` undone. On Windows a backslash is the
+    path separator (``C:\\Users\\...``), so it is left alone there."""
     s = raw.strip()
     if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
         return s[1:-1]
+    if (system or platform.system()) == "windows":
+        return s
     return re.sub(r"\\(.)", r"\1", s)
 
 

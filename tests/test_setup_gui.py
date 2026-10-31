@@ -166,6 +166,7 @@ class World:
 @pytest.fixture(autouse=True)
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     return tmp_path
 
 
