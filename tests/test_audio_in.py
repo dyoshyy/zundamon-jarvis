@@ -361,3 +361,58 @@ async def test_open_waits_for_a_slow_but_finishing_close():
     a.open()  # the first close finishes quickly: no complaint
     assert len(FakeInputStream.instances) == 2
     a.close()
+
+
+# ---- Windows (MME devices through sounddevice; no PipeWire) ----
+
+async def test_windows_opens_portaudio_devices_and_never_pulse(monkeypatch):
+    monkeypatch.delenv("PULSE_SOURCE", raising=False)
+    seen = []
+
+    class Spy(FakeInputStream):
+        def __init__(self, **kw):
+            seen.append((kw["device"], os.environ.get("PULSE_SOURCE")))
+            super().__init__(**kw)
+
+    a = AudioIn(system="windows", stream_factory=Spy)  # mic_device None: the Sound Mapper
+    a.open()
+    a.close()
+    b = AudioIn(device="Microphone (Realtek(R) Audio)", system="windows", stream_factory=Spy,
+                source_names=lambda: {"Microphone (Realtek(R) Audio)"},
+                input_index=lambda name: 1 if name == "Microphone (Realtek(R) Audio)" else None)
+    b.open()
+    b.close()
+    c = AudioIn(device=12, system="windows", stream_factory=Spy)
+    c.open()
+    c.close()
+    assert seen == [(None, None), (1, None), (12, None)]
+    assert "PULSE_SOURCE" not in os.environ and not b.fallback
+    kw = FakeInputStream.instances[-1].kw
+    assert kw["samplerate"] == 16000 and kw["channels"] == 1 and kw["dtype"] == "float32"
+
+
+async def test_windows_default_name_lookup_is_the_mme_one(monkeypatch):
+    from zundamon_jarvis import audio_in
+
+    asked = []
+    monkeypatch.setattr(audio_in, "input_device_index",
+                        lambda name, **kw: asked.append((name, kw)) or 4)
+    a = AudioIn(device="USB Mic", system="windows", stream_factory=FakeInputStream,
+                source_names=lambda: None)
+    a.open()
+    assert FakeInputStream.instances[-1].kw["device"] == 4
+    assert asked == [("USB Mic", {"system": "windows"})]
+    a.close()
+
+
+async def test_windows_index_of_a_rate_refusing_host_api_falls_back(caplog):
+    def factory(**kw):
+        if kw["device"] == 12:  # e.g. a WASAPI index: shared mode refuses 16 kHz
+            raise OSError("Invalid sample rate [PaErrorCode -9997]")
+        return FakeInputStream(**kw)
+
+    a = AudioIn(device=12, system="windows", stream_factory=factory)
+    a.open()
+    assert FakeInputStream.instances[-1].kw["device"] is None and a.fallback
+    assert "could not be opened" in caplog.text
+    a.close()
