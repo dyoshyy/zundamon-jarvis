@@ -18,7 +18,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --python 3.12
-      - run: uv run --no-sync python -m pytest -q
+      - run: uv run --no-sync python -m pytest -v --tb=short -rfE
       - name: CLI entry points start
         run: |
           uv run --no-sync zundamon-jarvis --version
