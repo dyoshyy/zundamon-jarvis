@@ -156,7 +156,7 @@ class FakeRegistry:
         return self._approved
 
 
-EXEW = r"C:\Users\Taro Yamada\AppData\Roaming\uv\tools\zundamon-jarvis\Scripts\zundamon-jarvisw.exe"
+EXEW = r"C:\Users\Some User\AppData\Roaming\uv\tools\zundamon-jarvis\Scripts\zundamon-jarvisw.exe"
 
 
 def test_windows_install_registers_the_quoted_launcher_and_restarts_the_supervisor():
