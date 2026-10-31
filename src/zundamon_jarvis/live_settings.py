@@ -10,6 +10,9 @@
   CoreAudio input device name (Mac) or a PortAudio device index. Saved only: the open stream
   keeps its device until ZundamonJarvis restarts (``snapshot()["mic_active"]`` is the one in
   use, ``["mic_device"]`` the saved one).
+- ``language``: ``ja`` / ``en``, the display language of the windows, menus and setup
+  (``zundamon_jarvis.i18n``). Saved only: nothing in the daemon shows text, and the windows
+  read config.toml the next time they draw. What ZundamonJarvis says follows the speaker.
 
 Every change goes to the running objects first, then to config.toml (``update_config``: only
 that key). A config file that can't be written (broken TOML) leaves the change applied live and
@@ -36,7 +39,7 @@ from typing import Any
 
 import httpx
 
-from zundamon_jarvis.config import CONFIG_PATH, MODELS, SPEED_MAX, SPEED_MIN, Config, update_config, valid_speed
+from zundamon_jarvis.config import CONFIG_PATH, LANGUAGES, MODELS, SPEED_MAX, SPEED_MIN, Config, update_config, valid_speed
 from zundamon_jarvis.mics import parse_mic
 from zundamon_jarvis.tts import RATE, talk_styles
 
@@ -47,7 +50,7 @@ SYNTH_TIMEOUT_S = 8.0
 SPEAKERS_TIMEOUT_S = 3.0
 SPEAKER_ID_MAX = 100_000
 PLAY_MARGIN_S = 2.0  # a sample may play this much longer than its length before it is cut
-SETTABLE = ("speed", "speaker", "model", "mic")
+SETTABLE = ("speed", "speaker", "model", "mic", "language")
 
 
 def parse_speed(raw: str) -> float:
@@ -72,6 +75,13 @@ def parse_model(raw: str) -> str:
     raw = raw.strip()
     if raw not in MODELS:
         raise ValueError(f"model must be one of {'/'.join(MODELS)}: {raw!r}")
+    return raw
+
+
+def parse_language(raw: str) -> str:
+    raw = raw.strip()
+    if raw not in LANGUAGES:
+        raise ValueError(f"language must be one of {'/'.join(LANGUAGES)}: {raw!r}")
     return raw
 
 
@@ -131,6 +141,7 @@ class LiveSettings:
             "mic_active": self._mic_active,
             "speed_min": SPEED_MIN,
             "speed_max": SPEED_MAX,
+            "language": self._cfg.language,  # None: the OS's
         }
 
     # ---- set ----
@@ -155,6 +166,10 @@ class LiveSettings:
                 mic = parse_mic(raw)
                 self._cfg.mic_device = mic
                 saved = self._save({"mic_device": mic})  # None removes the line
+            elif key == "language":
+                lang = parse_language(raw)
+                self._cfg.language = lang
+                saved = self._save({"language": lang})
             else:
                 return {"error": f"unknown setting: {key!r} (use {'/'.join(SETTABLE)})"}
         except ValueError as e:

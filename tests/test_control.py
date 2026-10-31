@@ -379,6 +379,13 @@ async def test_set_passes_key_and_value_and_adds_the_status():
     assert "error" in await control.handle("set speed 9", t, s)
 
 
+async def test_set_language_goes_to_the_settings():
+    t, s = Target(), FakeSettings()
+    await control.handle("set language en", t, s)
+    assert s.calls == [("set", "language", "en")]
+    assert "language" in (await control.handle("set language", t, s))["error"]
+
+
 @pytest.mark.parametrize("line", ["set", "set speed", "set  ", "preview", "preview 3",
                                   "preview 3 1.2", "get extra", "newsession now"])
 async def test_malformed_settings_commands_are_errors(line):

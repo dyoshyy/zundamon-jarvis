@@ -136,7 +136,7 @@ def test_snapshot(env):
     assert live.snapshot() == {"speed": 1.2, "speaker_id": 13, "model": "sonnet",
                                "session_model": None, "models": ["sonnet", "opus", "haiku"],
                                "mic_device": None, "mic_active": None,
-                               "speed_min": 0.8, "speed_max": 2.0}
+                               "speed_min": 0.8, "speed_max": 2.0, "language": None}
 
 
 async def test_set_speed_applies_live_and_persists_keeping_other_keys(env):
@@ -181,7 +181,7 @@ async def test_set_rejects_bad_input_and_changes_nothing(env):
     live, cfg, vv, *_, path = env
     before = path.read_text(encoding="utf-8")
     for key, raw in [("speed", "3"), ("speed", "x"), ("model", "gpt"), ("volume", "1"),
-                     ("speaker", "-2")]:
+                     ("speaker", "-2"), ("language", "fr"), ("language", "EN")]:
         resp = await live.set(key, raw)
         assert "error" in resp, (key, raw)
     assert (cfg.speed, cfg.model, vv.speed) == (1.2, "sonnet", 1.2)
@@ -292,6 +292,16 @@ async def test_set_mic_saves_but_the_running_mic_stays(env):
     assert r["settings"]["mic_device"] is None
     assert "mic_device" not in path.read_text(encoding="utf-8") and "unknown = 1" in path.read_text(encoding="utf-8")
     assert "error" in await live.set("mic", "  ")
+
+
+async def test_set_language_only_saves(env):
+    live, cfg, *_, path = env
+    r = await live.set("language", "en")
+    assert r["ok"] and r["saved"] and r["settings"]["language"] == "en"
+    assert cfg.language == "en" and load_config(path).language == "en"
+    assert "unknown = 1" in path.read_text(encoding="utf-8")
+    r = await live.set("language", " ja ")
+    assert load_config(path).language == "ja"
 
 
 # ---- fix round: the ears never stay muted ----

@@ -12,9 +12,10 @@ Settings (``zundamon_jarvis.live_settings``; the settings window and ``zundamon-
 the same status plus their own fields:
 
 - ``get`` -> ``"settings": {speed, speaker_id, model, session_model, models, mic_device,
-  mic_active, speed_min, speed_max}``
+  mic_active, speed_min, speed_max, language}``
 - ``set speed <0.8..2.0>`` / ``set speaker <style id>`` / ``set model sonnet|opus|haiku`` /
-  ``set mic default|<source name>|<device index>`` (saved; applies on restart) ->
+  ``set mic default|<source name>|<device index>`` (saved; applies on restart) /
+  ``set language ja|en`` (saved; the windows and menus follow when they next draw) ->
   ``"ok": true, "saved": <written to config.toml>, "settings": {...}``
 - ``preview <style id> <speed> <text>`` -> ``"ok": true`` (playing), or ``"ok": false,
   "busy": "user_speaking"|"speaking"|"replaced"`` (nothing played)
@@ -144,7 +145,7 @@ async def _settings_command(line: str, settings: Settings | None) -> dict:
         parts = line.split(maxsplit=3)  # the text keeps its inner spaces
         if len(parts) == 4:
             return await settings.preview(parts[1], parts[2], parts[3])
-    usage = {"get": "get", "newsession": "newsession", "set": "set speed|speaker|model|mic <value>",
+    usage = {"get": "get", "newsession": "newsession", "set": "set speed|speaker|model|mic|language <value>",
              "preview": "preview <speaker id> <speed> <text>"}[cmd]
     return {"error": f"usage: {usage}"}
 
