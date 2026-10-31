@@ -59,7 +59,8 @@ if [ -f "{self.fail}" ] && case "$*" in "$(cat "{self.fail}")"*) true;; *) false
 ''')
 
     def run(self, **extra) -> subprocess.CompletedProcess:
-        env = {"PATH": f"{self.bin}:{self.sys}", "HOME": str(self.home), "ZJ_TTY": "/dev/null", **extra}
+        env = {"PATH": f"{self.bin}:{self.sys}", "HOME": str(self.home), "ZJ_TTY": "/dev/null",
+               "LANG": "ja_JP.UTF-8", **extra}
         return subprocess.run(["sh", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=60)
 
     def calls(self) -> list[str]:
@@ -259,7 +260,7 @@ def test_children_do_not_read_the_script_from_stdin(env):
 echo "zundamon-jarvis $*" >> "{env.log}"
 cat > /dev/null
 ''')
-    env_vars = {"PATH": f"{env.bin}:{env.sys}", "HOME": str(env.home), "ZJ_TTY": "/dev/null"}
+    env_vars = {"PATH": f"{env.bin}:{env.sys}", "HOME": str(env.home), "ZJ_TTY": "/dev/null", "LANG": "ja_JP.UTF-8"}
     r = subprocess.run(f'cat "{SCRIPT}" | sh', shell=True, env=env_vars, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     assert "==> 完了しました" in r.stdout
@@ -271,3 +272,25 @@ def test_truncated_script_runs_nothing(env, tmp_path):
     r = subprocess.run(["sh", str(cut)], env={"PATH": f"{env.bin}:{env.sys}", "HOME": str(env.home)},
                        capture_output=True, text=True)
     assert env.calls() == []
+
+
+def test_messages_are_english_when_the_locale_is_not_japanese(env):
+    r = env.run(LANG="en_US.UTF-8")
+    assert r.returncode == 0, r.stderr
+    assert "==> Checking your system" in r.stdout and "==> Done" in r.stdout
+    assert not any("\u3040" <= ch <= "\u30ff" for ch in r.stdout)  # no kana left
+
+
+def test_lc_all_and_zj_lang_decide_the_language(env):
+    assert "環境を確認しています" in env.run(LANG="en_US.UTF-8", LC_ALL="ja_JP.UTF-8").stdout
+    assert "Checking your system" in env.run(LANG="ja_JP.UTF-8", LC_ALL="C").stdout
+    assert "Checking your system" in env.run(ZJ_LANG="en").stdout
+    assert "Checking your system" in env.run(LANG="").stdout  # no locale at all: English
+
+
+def test_english_failure_names_the_step_and_says_rerun(env):
+    env.fail.write_text("tool install")
+    r = env.run(LANG="C.UTF-8")
+    assert r.returncode == 1
+    assert "==> Failed: Installing zundamon-jarvis" in r.stderr
+    assert "run the same command again" in r.stderr
