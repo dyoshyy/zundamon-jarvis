@@ -79,6 +79,13 @@ From a shell (every platform):
   `zundamon-jarvis doctor` prints a diagnostic report;
   `zundamon-jarvis uninstall` removes the service and its files
 
+## Updating
+
+`zundamon-jarvis update` installs the newest release (`update --check` only looks; exit 1 means one is out).
+On Mac and Windows the menu bar / tray also shows **Update to vX.Y.Z…** when one is out; the update runs in
+the background, restarts the service, and logs to `update.log` in the log directory. A Linux git checkout is
+updated with `git pull --ff-only` and `uv sync` (`zundamon-jarvis update` does both when the tree is clean).
+
 ## Configuration
 
 `config.toml` keys (all optional; comments and unknown keys are kept when the tool edits the file):
@@ -232,6 +239,12 @@ Windows ではトレイアイコン（隠れているときは `^` の中）が�
 Conversation と Settings は Windows Terminal の窓で開きます。トレイを終了しても常駐は止まりません。
 シェルからは `zundamon-jarvisctl toggle|pause|resume|status|watch|settings|get|set`、`zundamon-jarvis setup|doctor|uninstall` が使えます
 （`zundamon-jarvis setup --cli` で、設定をターミナルで行えます）。
+
+## 更新
+
+`zundamon-jarvis update` で最新の版を入れます（`update --check` は確かめるだけ。更新があると終了コード 1）。
+Mac と Windows では、新しい版が出るとメニューバー / トレイに **vX.Y.Z に更新…** が出ます。更新は裏で進み、常駐を起動し直し、ログはログの置き場所の `update.log` です。
+Linux の git の clone は `git pull --ff-only` と `uv sync` で更新します（変更の無い状態なら `zundamon-jarvis update` が両方行います）。
 
 ## 設定
 
