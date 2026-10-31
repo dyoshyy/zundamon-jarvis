@@ -38,7 +38,7 @@ def test_list_sources_runs_pactl_and_survives_its_absence():
         seen.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, PACTL, "")
 
-    assert mics.list_sources(run) == SOURCES and seen == [["pactl", "-f", "json", "list", "sources"]]
+    assert mics.list_sources(run, system="linux") == SOURCES and seen == [["pactl", "-f", "json", "list", "sources"]]
 
     def missing(cmd, **kw):
         raise FileNotFoundError
@@ -46,7 +46,7 @@ def test_list_sources_runs_pactl_and_survives_its_absence():
     def fails(cmd, **kw):
         raise subprocess.CalledProcessError(1, cmd)
 
-    assert mics.list_sources(missing) == [] and mics.list_sources(fails) == []
+    assert mics.list_sources(missing, system="linux") == [] and mics.list_sources(fails, system="linux") == []
 
 
 def test_parse_mic():
@@ -86,13 +86,13 @@ def test_default_source_name_asks_pactl_and_survives_its_absence():
         seen.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, "alsa_input.cam\n", "")
 
-    assert mics.default_source_name(run) == "alsa_input.cam"
+    assert mics.default_source_name(run, system="linux") == "alsa_input.cam"
     assert seen == [["pactl", "get-default-source"]]
 
     def broken(cmd, **kw):
         raise FileNotFoundError("pactl")
 
-    assert mics.default_source_name(broken) is None
+    assert mics.default_source_name(broken, system="linux") is None
 
 
 def test_default_choice_shows_the_resolved_source_name():
@@ -109,12 +109,12 @@ def test_installed_source_names_parses_pactl_short():
         assert cmd == ["pactl", "list", "sources", "short"]
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
-    assert mics.installed_source_names(run) == {"alsa_input.cam", "bluez_input.AA"}
+    assert mics.installed_source_names(run, system="linux") == {"alsa_input.cam", "bluez_input.AA"}
 
     def broken(cmd, **kw):
         raise FileNotFoundError("pactl")
 
-    assert mics.installed_source_names(broken) is None
+    assert mics.installed_source_names(broken, system="linux") is None
 
 
 # ---- macOS: CoreAudio devices through sounddevice (a fixture, never the real query) ----

@@ -21,7 +21,7 @@ def _extract_ok(parts, into, tar):
     root = Path(into) / "voicevox_engine"
     root.mkdir(parents=True)
     run = root / "run"
-    run.write_text("#!/bin/sh\n")
+    run.write_text("#!/bin/sh\n", encoding="utf-8")
     run.chmod(0o755)
 
 
@@ -44,9 +44,9 @@ def test_engine_rejects_bad_checksum(tmp_path, monkeypatch):
 def test_engine_skips_when_installed(tmp_path, monkeypatch):
     dest = tmp_path / "voicevox_engine"
     dest.mkdir()
-    (dest / "run").write_text("x")
+    (dest / "run").write_text("x", encoding="utf-8")
     (dest / "run").chmod(0o755)
-    (dest / engine.MARKER).write_text(engine.ENGINE["version"])
+    (dest / engine.MARKER).write_text(engine.ENGINE["version"], encoding="utf-8")
     called = []
     engine.install_engine("mac", dest, fetch=lambda *a: called.append(a), extract=_extract_ok, check=lambda r: None)
     assert called == []
@@ -65,7 +65,7 @@ def test_engine_installs_verified_parts(tmp_path, monkeypatch):
     dest = tmp_path / "d" / "voicevox_engine"
     engine.install_engine("mac", dest, fetch=_fetch_factory(blobs), extract=extract, check=lambda r: None)
     assert (dest / "run").exists()
-    assert (dest / engine.MARKER).read_text() == engine.ENGINE["version"]
+    assert (dest / engine.MARKER).read_text(encoding="utf-8") == engine.ENGINE["version"]
     assert seen["names"] == ["a.001", "a.002"]
 
 
@@ -96,7 +96,7 @@ def test_cpu_flavor_rejected_on_mac(tmp_path):
 def test_swap_restores_old_install_on_failure(tmp_path, monkeypatch):
     dest = tmp_path / "voicevox_engine"
     dest.mkdir()
-    (dest / "keep").write_text("old")
+    (dest / "keep").write_text("old", encoding="utf-8")
     new = tmp_path / "new"
     new.mkdir()
     tmp = tmp_path / "tmp"
@@ -113,7 +113,7 @@ def test_swap_restores_old_install_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(engine.os, "replace", flaky)
     with pytest.raises(OSError):
         engine._swap_in(new, dest, tmp)
-    assert (dest / "keep").read_text() == "old"
+    assert (dest / "keep").read_text(encoding="utf-8") == "old"
 
 
 def test_swap_replaces_symlinked_dest(tmp_path):
@@ -123,11 +123,11 @@ def test_swap_replaces_symlinked_dest(tmp_path):
     dest.symlink_to(real_old)
     new = tmp_path / "new"
     new.mkdir()
-    (new / "run").write_text("n")
+    (new / "run").write_text("n", encoding="utf-8")
     tmp = tmp_path / "tmp"
     tmp.mkdir()
     engine._swap_in(new, dest, tmp)
-    assert not dest.is_symlink() and (dest / "run").read_text() == "n"
+    assert not dest.is_symlink() and (dest / "run").read_text(encoding="utf-8") == "n"
     assert real_old.exists()
 
 
@@ -159,13 +159,13 @@ def test_install_engine_end_to_end_with_real_extract(tmp_path, monkeypatch):
         assert Path(argv[2]).read_bytes() == b"aabb"
         root = Path(argv[argv.index("-C") + 1]) / "voicevox_engine"
         root.mkdir()
-        (root / "run").write_text("#!/bin/sh\n")
+        (root / "run").write_text("#!/bin/sh\n", encoding="utf-8")
         (root / "run").chmod(0o755)
 
     monkeypatch.setattr(engine.subprocess, "run", fake_run)
     dest = tmp_path / "d" / "voicevox_engine"
     engine.install_engine("mac", dest, fetch=_fetch_factory(blobs), check=lambda r: None)
-    assert (dest / "run").exists() and (dest / engine.MARKER).read_text() == engine.ENGINE["version"]
+    assert (dest / "run").exists() and (dest / engine.MARKER).read_text(encoding="utf-8") == engine.ENGINE["version"]
     assert [p.name for p in dest.parent.iterdir()] == ["voicevox_engine"]
 
 
@@ -234,7 +234,7 @@ def test_windows_install_unpacks_the_vvpp_with_zipfile(tmp_path, monkeypatch):
     assert checked and checked[0].name == "run.exe"
     assert (dest / "run.exe").read_bytes() == b"MZ"
     assert (dest / "engine_internal" / "lib.dll").read_bytes() == b"dll"
-    assert (dest / engine.MARKER).read_text() == engine.ENGINE["version"]
+    assert (dest / engine.MARKER).read_text(encoding="utf-8") == engine.ENGINE["version"]
     # zipfile drops ".." from member paths: nothing lands outside the engine directory
     assert [p.parent for p in tmp_path.rglob("escape.txt")] == [dest]
     assert [p.name for p in dest.parent.iterdir()] == ["voicevox_engine"]  # .vvpp and tmp gone
@@ -255,7 +255,7 @@ def test_windows_installed_needs_run_exe_but_no_execute_bit(tmp_path):
     dest = tmp_path / "voicevox_engine"
     dest.mkdir()
     (dest / "run.exe").write_bytes(b"MZ")  # mode 0644: Windows has no execute bit
-    (dest / engine.MARKER).write_text(engine.ENGINE["version"])
+    (dest / engine.MARKER).write_text(engine.ENGINE["version"], encoding="utf-8")
     called = []
     engine.install_engine("windows", dest, fetch=lambda *a: called.append(a), check=lambda r: None)
     assert called == []
@@ -270,7 +270,7 @@ def test_archive_root_finds_run_at_the_root_or_in_one_folder(tmp_path):
     assert engine.archive_root(flat, "windows") == flat
     nested = tmp_path / "nested"
     (nested / "voicevox_engine").mkdir(parents=True)
-    (nested / "voicevox_engine" / "run").write_text("x")
+    (nested / "voicevox_engine" / "run").write_text("x", encoding="utf-8")
     assert engine.archive_root(nested, "linux") == nested / "voicevox_engine"
     with pytest.raises(RuntimeError, match="run.exe"):
         engine.archive_root(nested, "windows")

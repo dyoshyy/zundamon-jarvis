@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ def home(monkeypatch, tmp_path):
     h = tmp_path / "Users" / "taro"
     h.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(h))
+    monkeypatch.setenv("USERPROFILE", str(h))  # Path.home() on Windows
     return h
 
 
@@ -58,13 +60,13 @@ def test_doctor_redacts_home_user_email_and_conversation(home):
     logs.mkdir(parents=True)
     (logs / "daemon.log").write_text(
         "".join(f"INFO line {i}\n" for i in range(300))
-        + f"WARNING config: knowledge_dir '{home}/notes' for taro (taro@example.com)\n")
+        + f"WARNING config: knowledge_dir '{home}/notes' for taro (taro@example.com)\n", encoding="utf-8")
     (logs / "2026-10-24.jsonl").write_text(json.dumps(
         {"ts": "2026-10-24T10:00:00+09:00", "heard": "銀行の暗証番号は", "replied": "言わないで",
-         "state": "listening"}, ensure_ascii=False) + "\n")
+         "state": "listening"}, ensure_ascii=False) + "\n", encoding="utf-8")
     cfg = home / "Library" / "Application Support" / "zundamon-jarvis" / "config.toml"
     cfg.parent.mkdir(parents=True)
-    cfg.write_text(f'knowledge_dir = "{home}/notes"\nmodel = "opus"\n')
+    cfg.write_text(f'knowledge_dir = {json.dumps(f"{home}/notes")}\nmodel = "opus"\n', encoding="utf-8")
     lines: list[str] = []
     assert doctor.run_doctor(lines.append, config_path=cfg, **kw(home)) == 0
     out = "\n".join(lines)
@@ -125,7 +127,7 @@ def test_doctor_hides_speech_in_voicevox_and_old_daemon_logs(home):
     logs.mkdir(parents=True)
     (logs / "voicevox.log").write_text(
         f'INFO:     127.0.0.1:50123 - "POST /audio_query?text={SECRET_URL}&speaker=3 HTTP/1.1" 200 OK\n'
-        'INFO:     127.0.0.1:50124 - "POST /synthesis?speaker=3 HTTP/1.1" 200 OK\n')
+        'INFO:     127.0.0.1:50124 - "POST /synthesis?speaker=3 HTTP/1.1" 200 OK\n', encoding="utf-8")
     (logs / "daemon.log").write_text("\n".join([
         "ERROR zundamon_jarvis.orchestrator: speak failed: '秘密の返事です。'",
         "Traceback (most recent call last):",
@@ -137,7 +139,7 @@ def test_doctor_hides_speech_in_voicevox_and_old_daemon_logs(home):
         "WARNING zundamon_jarvis.brain: Claude turn failed: ResultMessage(subtype='error', result='返事の一部')",
         "INFO zundamon_jarvis.orchestrator: utterance dropped (paused): '独り言'",
         "WARNING zundamon_jarvis.orchestrator: speak failed (12 chars): HTTPStatusError",
-    ]) + "\n")
+    ]) + "\n", encoding="utf-8")
     lines: list[str] = []
     assert doctor.run_doctor(lines.append, **kw(home)) == 0
     out = "\n".join(lines)
@@ -153,10 +155,10 @@ def test_doctor_hides_the_knowledge_dir(home):
     notes.mkdir(parents=True)
     cfg = home / "Library" / "Application Support" / "zundamon-jarvis" / "config.toml"
     cfg.parent.mkdir(parents=True)
-    cfg.write_text('knowledge_dir = "~/Documents/秘密プロジェクト"\nspeed = 1.4\n')
+    cfg.write_text('knowledge_dir = "~/Documents/秘密プロジェクト"\nspeed = 1.4\n', encoding="utf-8")
     logs = home / "Library" / "Logs" / "zundamon-jarvis"
     logs.mkdir(parents=True)
-    (logs / "daemon.log").write_text(f"WARNING config: knowledge_dir {notes} is not an existing directory\n")
+    (logs / "daemon.log").write_text(f"WARNING config: knowledge_dir {notes} is not an existing directory\n", encoding="utf-8")
     lines: list[str] = []
     assert doctor.run_doctor(lines.append, config_path=cfg, **kw(home)) == 0
     out = "\n".join(lines)
@@ -189,8 +191,8 @@ def test_doctor_reads_the_daemon_python_from_the_launch_agent(home):
     exe.parent.mkdir(parents=True)
     py = home / ".local" / "share" / "uv" / "tools" / "zundamon-jarvis" / "bin" / "python3.12"
     py.parent.mkdir(parents=True)
-    py.write_text("")
-    exe.write_text(f"#!{py}\nimport sys\n")
+    py.write_text("", encoding="utf-8")
+    exe.write_text(f"#!{py}\nimport sys\n", encoding="utf-8")
     agents = home / "Library" / "LaunchAgents"
     agents.mkdir(parents=True)
     (agents / "dev.zundamon-jarvis.daemon.plist").write_bytes(
@@ -203,10 +205,13 @@ def test_doctor_reads_the_daemon_python_from_the_launch_agent(home):
 def test_short_names_match_only_whole_words_and_cjk_parts_count(monkeypatch):
     out = doctor.redact("alice logged in; alicia's mic; /x/alice/y", home=Path("/nowhere"), names=["alice"])
     assert out == "<user> logged in; alicia's mic; /x/<user>/y"
-    import pwd
-
     monkeypatch.setattr(doctor.getpass, "getuser", lambda: "taro")
-    monkeypatch.setattr(pwd, "getpwuid", lambda uid: type("P", (), {"pw_gecos": "山田 太郎,,,"})())
+    if sys.platform == "win32":  # no pwd: the full name comes from the Windows account
+        monkeypatch.setattr(doctor, "_windows_full_name", lambda: "山田 太郎")
+    else:
+        import pwd
+
+        monkeypatch.setattr(pwd, "getpwuid", lambda uid: type("P", (), {"pw_gecos": "山田 太郎,,,"})())
     assert set(doctor.user_names()) == {"taro", "山田 太郎", "山田", "太郎"}
 
 
@@ -224,7 +229,7 @@ def test_doctor_on_windows_reads_files_registry_and_gpus(home, tmp_path):
 
     logs = tmp_path / "Local" / "zundamon-jarvis" / "logs"
     logs.mkdir(parents=True)
-    (logs / "daemon.log").write_text("INFO zundamon_jarvis.daemon: running (listening)\n")
+    (logs / "daemon.log").write_text("INFO zundamon_jarvis.daemon: running (listening)\n", encoding="utf-8")
     lines: list[str] = []
     assert doctor.run_doctor(lines.append, **kw(
         home, system="windows", run=run, log_dir=logs,

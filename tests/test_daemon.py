@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -811,15 +812,24 @@ def test_already_running_check_skips_the_heavy_imports(tmp_path):
     import subprocess
     import sys
 
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(tmp_path / "zundamon-jarvis.sock"))
-    srv.listen(1)
+    if sys.platform == "win32":  # the endpoint is control.json (port + token) in LOCALAPPDATA
+        srv = socket.create_server(("127.0.0.1", 0))
+        run_dir = tmp_path / "zundamon-jarvis" / "run"
+        run_dir.mkdir(parents=True)
+        (run_dir / "control.json").write_text(
+            json.dumps({"port": srv.getsockname()[1], "token": "t"}), encoding="utf-8")
+        env = {"LOCALAPPDATA": str(tmp_path)}
+    else:
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(str(tmp_path / "zundamon-jarvis.sock"))
+        srv.listen(1)
+        env = {"XDG_RUNTIME_DIR": str(tmp_path)}
     try:
         code = ("import sys; from zundamon_jarvis.daemon import main; r = main([]); "
                 "print(r, [m for m in ('faster_whisper', 'onnxruntime', 'sounddevice', "
                 "'claude_agent_sdk') if m in sys.modules])")
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                             env={**os.environ, "XDG_RUNTIME_DIR": str(tmp_path)}, timeout=30)
+                             env={**os.environ, **env}, timeout=30)
     finally:
         srv.close()
     assert out.stdout.strip() == "3 []", out.stderr

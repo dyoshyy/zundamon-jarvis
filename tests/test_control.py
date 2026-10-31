@@ -1,12 +1,12 @@
 import asyncio
 import json
 import os
-import socket
 import stat
 
 import pytest
 
-from zundamon_jarvis import control
+from helpers import WINDOWS, endpoint, open_endpoint
+from zundamon_jarvis import control, transport
 
 
 class Target:
@@ -57,16 +57,21 @@ async def test_unknown_command_is_an_error_and_does_nothing():
 
 
 def test_socket_path_is_in_the_runtime_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    assert control.socket_path() == tmp_path / "zundamon-jarvis.sock"
+    if WINDOWS:
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert control.socket_path() == tmp_path / "zundamon-jarvis" / "run" / "control.json"
+    else:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        assert control.socket_path() == tmp_path / "zundamon-jarvis.sock"
 
 
 async def test_server_round_trip_over_the_socket(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     t = Target("listening")
     server = await control.serve(t, path)
     try:
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        if not WINDOWS:  # no mode bits there: the TCP token guards the endpoint instead
+            assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
         resp = await asyncio.to_thread(control.request, "toggle", path)
         assert resp == {"state": "paused", "text": "Paused"}
         resp = await asyncio.to_thread(control.request, "status", path)
@@ -77,8 +82,8 @@ async def test_server_round_trip_over_the_socket(tmp_path):
 
 
 async def test_server_replaces_a_stale_socket_but_refuses_a_live_one(tmp_path):
-    path = tmp_path / "j.sock"
-    path.write_text("")  # stale leftover from a crash
+    path = endpoint(tmp_path)
+    path.write_text("", encoding="utf-8")  # stale leftover from a crash
     server = await control.serve(Target(), path)
     try:
         with pytest.raises(RuntimeError, match="already running"):
@@ -90,14 +95,14 @@ async def test_server_replaces_a_stale_socket_but_refuses_a_live_one(tmp_path):
 
 def test_request_without_a_daemon_raises_oserror(tmp_path):
     with pytest.raises(OSError):
-        control.request("status", tmp_path / "nobody.sock")
+        control.request("status", endpoint(tmp_path, "nobody"))
 
 
 async def test_reply_is_one_json_line(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target("speaking"), path)
     try:
-        reader, writer = await asyncio.open_unix_connection(str(path))
+        reader, writer = await open_endpoint(path)
         writer.write(b"status\n")
         await writer.drain()
         raw = await reader.read()
@@ -110,7 +115,7 @@ async def test_reply_is_one_json_line(tmp_path):
 
 
 async def test_a_bare_liveness_probe_is_not_an_error(tmp_path, caplog):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     t = Target()
     server = await control.serve(t, path)
     try:
@@ -151,7 +156,7 @@ def fixed_now():
 
 
 async def open_watch(path):
-    reader, writer = await asyncio.open_unix_connection(str(path), limit=2**22)
+    reader, writer = await open_endpoint(path, limit=2**22)
     writer.write(b"watch\n")
     await writer.drain()
     return reader, writer
@@ -166,7 +171,7 @@ async def read_event(reader, timeout=1.0):
 @pytest.fixture
 async def watch_server(tmp_path):
     hub = control.WatchHub(now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     yield hub, path
     hub.close()
@@ -213,7 +218,7 @@ async def test_live_only_events_reach_watchers_but_not_the_history(watch_server)
 
 async def test_history_keeps_only_the_latest_events(tmp_path):
     hub = control.WatchHub(history=3, now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     try:
         for i in range(10):
@@ -257,11 +262,10 @@ async def test_a_watcher_that_leaves_is_forgotten(watch_server):
 
 async def test_a_stuck_watcher_is_dropped_without_blocking_the_others(tmp_path):
     hub = control.WatchHub(queue_max=8, now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     try:
-        slow = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # never reads a byte
-        slow.connect(str(path))
+        slow = transport.connect(path, 2)  # never reads a byte
         slow.sendall(b"watch\n")
         fast_reader, fast_writer = await open_watch(path)
         await asyncio.sleep(0.05)
@@ -299,7 +303,7 @@ async def test_a_stuck_watcher_is_dropped_without_blocking_the_others(tmp_path):
 
 async def test_closing_the_hub_ends_every_watch_so_the_server_can_close(tmp_path):
     hub = control.WatchHub(now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     reader, _ = await open_watch(path)
     await read_event(reader)
@@ -312,7 +316,7 @@ async def test_closing_the_hub_ends_every_watch_so_the_server_can_close(tmp_path
 
 
 async def test_watch_without_a_hub_is_an_error(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path)
     try:
         resp = await asyncio.to_thread(control.request, "watch", path)
@@ -393,7 +397,7 @@ async def test_settings_commands_without_settings_are_errors():
 
 
 async def test_settings_round_trip_over_the_socket(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     s = FakeSettings()
     server = await control.serve(Target(), path, settings=s)
     try:

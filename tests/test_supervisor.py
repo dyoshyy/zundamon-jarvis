@@ -254,15 +254,15 @@ def test_spawn_child_logs_and_drops_the_api_key(tmp_path, monkeypatch):
             break
         time.sleep(0.05)
     assert p.poll() == 0
-    assert (tmp_path / "daemon.log").read_text().strip() == "None 1"
+    assert (tmp_path / "daemon.log").read_text(encoding="utf-8").strip() == "None 1"
 
 
 def test_old_log_is_rotated(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "LOG_MAX_BYTES", 10)
-    (tmp_path / "x.log").write_text("x" * 20)
+    (tmp_path / "x.log").write_text("x" * 20, encoding="utf-8")
     supervisor._open_log(tmp_path / "x.log").close()
-    assert (tmp_path / "x.log.1").read_text() == "x" * 20
-    assert (tmp_path / "x.log").read_text() == ""
+    assert (tmp_path / "x.log.1").read_text(encoding="utf-8") == "x" * 20
+    assert (tmp_path / "x.log").read_text(encoding="utf-8") == ""
 
 
 def test_kill_tree_uses_taskkill_without_a_window():
@@ -322,15 +322,15 @@ def test_main_runs_until_the_stop_file_appears(win_dirs, monkeypatch):
     seen = {}
 
     def fake_serve(sup, should_stop, sleep, quit_daemon):
-        seen["pid"] = (run / supervisor.PID).read_text()
+        seen["pid"] = (run / supervisor.PID).read_text(encoding="utf-8")
         seen["running"] = supervisor.running_pid("windows")
         assert not should_stop()
-        (run / supervisor.STOP).write_text("")
+        (run / supervisor.STOP).write_text("", encoding="utf-8")
         assert should_stop()
 
     monkeypatch.setattr(supervisor, "serve", fake_serve)
     monkeypatch.setattr("zundamon_jarvis.service.find_exe", lambda s=None: "zj.exe")
-    (run / supervisor.STOP).write_text("")  # stale: must not stop the new supervisor at once
+    (run / supervisor.STOP).write_text("", encoding="utf-8")  # stale: must not stop the new supervisor at once
     assert supervisor.main([], system="windows") == 0
     assert seen == {"pid": str(os.getpid()), "running": os.getpid()}
     assert not (run / supervisor.PID).exists() and not (run / supervisor.STOP).exists()
@@ -365,7 +365,7 @@ def test_stop_kills_a_supervisor_that_hangs(win_dirs):
     run = supervisor.platform.runtime_dir("windows")
     held = InstanceLock(run / supervisor.LOCK)
     assert held.acquire()
-    (run / supervisor.PID).write_text("4321")
+    (run / supervisor.PID).write_text("4321", encoding="utf-8")
     killed = []
     clock = Clock()
 

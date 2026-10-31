@@ -184,9 +184,9 @@ def test_prefs_round_trip_and_survive_junk(tmp_path):
     assert load_prefs(path) == Prefs()
     save_prefs(path, Prefs(right=120, bottom=40, bubble=False))
     assert load_prefs(path) == Prefs(right=120, bottom=40, bubble=False)
-    path.write_text("{not json")
+    path.write_text("{not json", encoding="utf-8")
     assert load_prefs(path) == Prefs()
-    path.write_text('{"right": "x", "bottom": -5, "bubble": "yes", "extra": 1}')
+    path.write_text('{"right": "x", "bottom": -5, "bubble": "yes", "extra": 1}', encoding="utf-8")
     assert load_prefs(path) == Prefs(bottom=0)
 
 

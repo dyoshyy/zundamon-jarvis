@@ -83,7 +83,7 @@ def test_view_from_reply_and_from_config(tmp_path):
         (True, True, 1.5, 3, "haiku", "sonnet")
     assert sa.View.from_reply({"settings": {"mic_device": "cam", "mic_active": 3}}).mic_active == 3
     p = tmp_path / "c.toml"
-    p.write_text("speed = 1.4\nspeaker_id = 2\n")
+    p.write_text("speed = 1.4\nspeaker_id = 2\n", encoding="utf-8")
     v = sa.View.from_config(load_config(p))
     assert (v.online, v.speed, v.speaker_id, v.model) == (False, 1.4, 2, "sonnet")
 
@@ -130,7 +130,7 @@ def test_client_online_set_goes_to_the_daemon(tmp_path):
 
 def test_client_offline_writes_the_config_and_says_so(tmp_path):
     path = tmp_path / "c.toml"
-    path.write_text('mic_device = "m"\nother = "keep"\n')
+    path.write_text('mic_device = "m"\nother = "keep"\n', encoding="utf-8")
     c = sa.SettingsClient(request=Daemon(up=False).request, config_path=path)
     view = c.load()
     assert not view.online and view.speed == 1.2
@@ -143,8 +143,8 @@ def test_client_offline_writes_the_config_and_says_so(tmp_path):
     view, msg = c.set("mic", "cam")
     assert load_config(path).mic_device == "cam" and view.mic_device == "cam"
     view, msg = c.set("mic", "default")
-    assert load_config(path).mic_device is None and "mic_device" not in path.read_text()
-    assert 'other = "keep"' in path.read_text()
+    assert load_config(path).mic_device is None and "mic_device" not in path.read_text(encoding="utf-8")
+    assert 'other = "keep"' in path.read_text(encoding="utf-8")
     view, msg = c.set("speed", 9)
     assert msg and load_config(path).speed == 1.6
     assert "not running" in c.preview(3, 1.2, "やあ")

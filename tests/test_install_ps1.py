@@ -8,6 +8,7 @@ the user's PowerShell, PowerShell 5.1 syntax only, and the commands it runs.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -131,6 +132,7 @@ def test_parses_cleanly():
 
 
 @needs_pwsh
+@pytest.mark.skipif(sys.platform == "win32", reason="checks the refusal on a non-Windows host")
 def test_refuses_outside_windows_and_runs_nothing(tmp_path):
     r = subprocess.run([PWSH, "-NoProfile", "-File", str(SCRIPT)], capture_output=True, text=True, timeout=60,
                        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "ZJ_DRY_RUN": "1"})

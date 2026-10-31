@@ -34,7 +34,7 @@ async def test_tcp_round_trip_writes_port_and_token(tmp_path):
     path = tmp_path / "control.json"
     server = await control.serve(Target(), path)
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         assert isinstance(data["port"], int) and len(data["token"]) == 32
         resp = await asyncio.to_thread(control.request, "toggle", path)
         assert resp == {"state": "paused", "text": "Paused"}
@@ -49,7 +49,7 @@ async def test_tcp_without_the_token_gets_nothing(tmp_path):
     path = tmp_path / "control.json"
     t = Target()
     server = await control.serve(t, path)
-    port = json.loads(path.read_text())["port"]
+    port = json.loads(path.read_text(encoding="utf-8"))["port"]
 
     def intruder() -> bytes:
         with socket.create_connection(("127.0.0.1", port), timeout=3) as s:
@@ -72,14 +72,14 @@ def test_missing_endpoint_file_is_not_running(tmp_path):
 
 def test_garbled_endpoint_file_is_not_running(tmp_path):
     path = tmp_path / "control.json"
-    path.write_text("{not json")
+    path.write_text("{not json", encoding="utf-8")
     with pytest.raises(OSError):
         transport.connect(path, 1)
 
 
 async def test_tcp_stale_endpoint_is_replaced(tmp_path):
     path = tmp_path / "control.json"
-    path.write_text(json.dumps({"port": 1, "token": "x"}))  # left by a crash
+    path.write_text(json.dumps({"port": 1, "token": "x"}), encoding="utf-8")  # left by a crash
     server = await control.serve(Target(), path)
     try:
         resp = await asyncio.to_thread(control.request, "status", path)

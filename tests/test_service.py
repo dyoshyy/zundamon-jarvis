@@ -1,9 +1,17 @@
 import plistlib
+import sys
 from pathlib import Path
+
+import pytest
 
 from zundamon_jarvis import service
 
+# A launchd PATH is ':'-joined POSIX directories, built with the host's Path: only meaningful on a
+# POSIX host (on Windows "C:\\Users\\..." has a ':' of its own).
+posix_plist_path = pytest.mark.skipif(sys.platform == "win32", reason="launchd PATH needs POSIX paths")
 
+
+@posix_plist_path
 def test_plist_has_no_api_key_and_keeps_alive(tmp_path):
     data = service.launch_agent_plist("dev.zundamon-jarvis.daemon", ["/x/zundamon-jarvis", "daemon"], tmp_path / "d.log")
     p = plistlib.loads(data)
@@ -38,6 +46,7 @@ class Runner:
         return R()
 
 
+@posix_plist_path
 def test_install_services_mac_writes_three_agents(tmp_path):
     run = Runner()
     service.install_services(
@@ -76,21 +85,21 @@ def test_install_services_skips_when_present(tmp_path):
     units = tmp_path / ".config" / "systemd" / "user"
     units.mkdir(parents=True)
     for n in ("voicevox.service", "zundamon-jarvis.service"):
-        (units / n).write_text("x")
+        (units / n).write_text("x", encoding="utf-8")
     run = Runner()
     service.install_services("linux", run=run, home=tmp_path)
     assert run.calls == []
-    assert (units / "voicevox.service").read_text() == "x"
+    assert (units / "voicevox.service").read_text(encoding="utf-8") == "x"
 
 
 def test_install_services_linux_installs_and_enables(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     for n in ("voicevox.service", "zundamon-jarvis.service"):
-        (src / n).write_text(n)
+        (src / n).write_text(n, encoding="utf-8")
     run = Runner()
     service.install_services("linux", run=run, home=tmp_path / "h", unit_src=src)
-    assert (tmp_path / "h/.config/systemd/user/voicevox.service").read_text() == "voicevox.service"
+    assert (tmp_path / "h/.config/systemd/user/voicevox.service").read_text(encoding="utf-8") == "voicevox.service"
     assert ["systemctl", "--user", "daemon-reload"] in run.calls
     assert ["systemctl", "--user", "enable", "--now", "voicevox.service", "zundamon-jarvis.service"] in run.calls
 
@@ -115,9 +124,9 @@ def test_linux_install_adds_the_character_to_the_app_launcher(tmp_path):
     units = tmp_path / ".config" / "systemd" / "user"
     units.mkdir(parents=True)
     for n in ("voicevox.service", "zundamon-jarvis.service"):
-        (units / n).write_text("x")  # already installed: the launcher entry is still written
+        (units / n).write_text("x", encoding="utf-8")  # already installed: the launcher entry is still written
     service.install_services("linux", run=Runner(), home=tmp_path, ctl="/opt/zj/bin/zundamon-jarvisctl")
-    entry = (tmp_path / ".local/share/applications/zundamon-jarvis.desktop").read_text()
+    entry = (tmp_path / ".local/share/applications/zundamon-jarvis.desktop").read_text(encoding="utf-8")
     assert "\nExec=/opt/zj/bin/zundamon-jarvisctl character\n" in entry
     assert "\nIcon=zundamon-jarvis\n" in entry and "\nType=Application\n" in entry
     icon = tmp_path / ".local/share/icons/hicolor/256x256/apps/zundamon-jarvis.png"
@@ -128,7 +137,7 @@ def test_linux_uninstall_removes_the_launcher_entry(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     for n in ("voicevox.service", "zundamon-jarvis.service"):
-        (src / n).write_text(n)
+        (src / n).write_text(n, encoding="utf-8")
     service.install_services("linux", run=Runner(), home=tmp_path, ctl="/x/zundamon-jarvisctl",
                              unit_src=src)
     service.uninstall_services("linux", run=Runner(), home=tmp_path)
@@ -218,11 +227,11 @@ def test_windows_start_only_when_not_running():
 def test_find_exew_prefers_the_windowless_launcher_beside_python(tmp_path, monkeypatch):
     scripts = tmp_path / "Scripts"
     scripts.mkdir()
-    (scripts / "zundamon-jarvis.exe").write_text("")
+    (scripts / "zundamon-jarvis.exe").write_text("", encoding="utf-8")
     monkeypatch.setattr(service.sys, "executable", str(scripts / "python.exe"))
     monkeypatch.setattr(service.shutil, "which", lambda n: None)
     assert service.find_exew("windows") == str(scripts / "zundamon-jarvis.exe")  # no w: the console one
-    (scripts / "zundamon-jarvisw.exe").write_text("")
+    (scripts / "zundamon-jarvisw.exe").write_text("", encoding="utf-8")
     assert service.find_exew("windows") == str(scripts / "zundamon-jarvisw.exe")
     assert service.find_exe("windows") == str(scripts / "zundamon-jarvis.exe")
 

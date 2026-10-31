@@ -263,7 +263,7 @@ async def test_connects_on_first_submit_with_expected_options(brain, monkeypatch
     c = FakeClient.instances[0]
     assert c.connected and c.queries == ["明日の予定は？"]
     o = c.options
-    assert o.cwd == "/work/dir"
+    assert o.cwd == str(Path("/work/dir"))
     assert o.add_dirs == [] and "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD" not in o.env
     assert o.setting_sources == ["user", "project", "local"]
     assert o.include_partial_messages is True
@@ -432,7 +432,7 @@ def test_voice_mode_prompt_exists():
 
     # package data: resolves inside the installed package, not the checkout root
     assert brain.VOICE_PROMPT.parent.parent == Path(brain.__file__).parent
-    text = brain.VOICE_PROMPT.read_text()
+    text = brain.VOICE_PROMPT.read_text(encoding="utf-8")
     assert "[[silent]]" in text and "run_in_background" in text
 
 
@@ -448,7 +448,7 @@ def test_options_without_model_inherit_cli_default(model):
 def test_brain_options_carry_cwd_and_add_dirs():
     b = ClaudeBrain(Path("/w"), add_dirs=[Path("/kb")], client_factory=FakeClient)
     o = b._options()
-    assert o.cwd == "/w" and o.add_dirs == ["/kb"]
+    assert o.cwd == str(Path("/w")) and o.add_dirs == [str(Path("/kb"))]
     assert o.env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] == "1"
 
 

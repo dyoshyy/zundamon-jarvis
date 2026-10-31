@@ -1,5 +1,9 @@
 import json
+from pathlib import Path
 
+import pytest
+
+from helpers import WINDOWS, endpoint
 from zundamon_jarvis import ctl
 
 
@@ -61,7 +65,6 @@ import io  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
 
-import pytest  # noqa: E402
 
 from zundamon_jarvis import control  # noqa: E402
 
@@ -132,7 +135,7 @@ def test_view_shows_everything_again_after_a_daemon_restart():
 
 async def test_watch_prints_history_then_live_and_waits_when_the_daemon_goes(tmp_path):
     hub = control.WatchHub()
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(object(), path, hub=hub)
     hub.publish("heard", text="前の話")
     out = io.StringIO()
@@ -178,7 +181,7 @@ def test_watch_without_a_daemon_says_so_and_keeps_waiting(tmp_path):
         if len(calls) == 3:
             raise KeyboardInterrupt
 
-    assert ctl.watch(tmp_path / "none.sock", out=out, sleep=fake_sleep, color=False) == 0
+    assert ctl.watch(endpoint(tmp_path, "none"), out=out, sleep=fake_sleep, color=False) == 0
     assert out.getvalue().splitlines() == [ctl.WAITING_LINE]
     assert len(calls) == 3
 
@@ -197,7 +200,7 @@ def test_main_window_toggles_the_watch_window(monkeypatch):
     assert ctl.main(["window"]) == 0
     assert ctl.main(["window", "watch"]) == 0
     name, argv = got[0]
-    assert name == "watch" and argv[0].endswith("zundamon-jarvisctl") and argv[1:] == ["watch"]
+    assert name == "watch" and Path(argv[0]).stem == "zundamon-jarvisctl" and argv[1:] == ["watch"]
     assert got[0] == got[1]
     assert ctl.main(["window", "nope"]) == 2
 
@@ -207,7 +210,7 @@ def test_main_window_settings_opens_the_settings_window(monkeypatch):
     monkeypatch.setattr(ctl.desktop, "toggle_window", lambda name, argv: got.append((name, argv)))
     assert ctl.main(["window", "settings"]) == 0
     name, argv = got[0]
-    assert name == "settings" and argv[0].endswith("zundamon-jarvisctl") and argv[1:] == ["settings"]
+    assert name == "settings" and Path(argv[0]).stem == "zundamon-jarvisctl" and argv[1:] == ["settings"]
 
 
 # ---- settings from the command line ----
@@ -250,6 +253,7 @@ def test_zundamon_jarvisctl_does_not_load_the_tui_library():
     assert out.stdout.strip() == "False", out.stderr
 
 
+@pytest.mark.skipif(WINDOWS, reason="the GTK character overlay runs under the Linux system python")
 def test_character_runs_the_overlay_under_the_system_python():
     calls = []
     code = ctl._character("speaking", execve=lambda *a: calls.append(a))
@@ -337,6 +341,6 @@ def test_view_names_the_speaker_again_after_another_kind_of_line():
 
 
 def test_window_command_finds_the_windows_exe_beside_python(tmp_path, monkeypatch):
-    (tmp_path / "zundamon-jarvisctl.exe").write_text("")
+    (tmp_path / "zundamon-jarvisctl.exe").write_text("", encoding="utf-8")
     monkeypatch.setattr(ctl.sys, "executable", str(tmp_path / "python.exe"))
     assert ctl._zundamon_jarvisctl() == str(tmp_path / "zundamon-jarvisctl.exe")
