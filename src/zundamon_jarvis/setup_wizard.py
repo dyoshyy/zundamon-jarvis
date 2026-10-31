@@ -177,7 +177,7 @@ Still no sound? Send the output of `zundamon-jarvis doctor | clip`.""",
     "preview_failed": {"ja": "試し読みできませんでした（{error}）", "en": "Couldn't play the sample ({error})"},
     # the terminal wizard
     "voice_skip": {"ja": "VOICEVOX につながらないので、声選びは飛ばします。"
-                         "あとでメニューバーの Settings… から選べます。",
+                         "あとでメニューバーの「設定…」から選べます。",
                    "en": "Can't reach VOICEVOX, so skipping the voice for now. "
                          "You can choose one later in Settings… in the menu bar."},
     "voice_current": {"ja": "今の声: {voice}", "en": "Current voice: {voice}"},

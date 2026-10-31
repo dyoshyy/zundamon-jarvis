@@ -84,7 +84,7 @@ TEXT = {
     "start_pending": {"ja": "起動中です。少し待ってから、メニューバー（Windows は通知領域）のアイコンを見てください。",
                       "en": "Starting up. Give it a moment, then check the icon in the menu bar "
                             "(the notification area on Windows)."},
-    "voice_down": {"ja": "VOICEVOX につながらないので、試聴できません。声はあとで設定（Settings…）からも選べます。",
+    "voice_down": {"ja": "VOICEVOX につながらないので、試聴できません。声はあとで設定（メニューの「設定…」）からも選べます。",
                    "en": "Can't reach VOICEVOX, so there are no samples. "
                          "You can also choose a voice later in Settings…."},
     "voice_not_ready": {"ja": "声のエンジンの準備ができていません。", "en": "The voice engine isn't ready yet."},
