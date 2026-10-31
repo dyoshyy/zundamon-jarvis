@@ -199,7 +199,8 @@ def test_doctor_reads_the_daemon_python_from_the_launch_agent(home):
         plistlib.dumps({"ProgramArguments": [str(exe), "daemon"]}))
     lines: list[str] = []
     doctor.run_doctor(lines.append, **kw(home))
-    assert "デーモンの Python（起動設定から）: ~/.local/share/uv/tools/zundamon-jarvis/bin/python3.12" in "\n".join(lines)
+    py_shown = str(Path("~/.local/share/uv/tools/zundamon-jarvis/bin/python3.12"))  # host separators
+    assert f"デーモンの Python（起動設定から）: {py_shown}" in "\n".join(lines)
 
 
 def test_short_names_match_only_whole_words_and_cjk_parts_count(monkeypatch):

@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -258,6 +259,7 @@ def ctx(agent_id=None):
 
 async def test_connects_on_first_submit_with_expected_options(brain, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-be-used")
+    monkeypatch.setattr(shutil, "which", lambda name: f"/opt/bin/{name}" if name == "claude" else None)
     assert FakeClient.instances == []
     await brain.submit("明日の予定は？")
     c = FakeClient.instances[0]
@@ -269,7 +271,7 @@ async def test_connects_on_first_submit_with_expected_options(brain, monkeypatch
     assert o.include_partial_messages is True
     assert o.system_prompt["type"] == "preset" and o.system_prompt["preset"] == "claude_code"
     assert "[[silent]]" in o.system_prompt["append"]
-    assert o.cli_path and o.cli_path.endswith("claude")
+    assert o.cli_path == "/opt/bin/claude"  # found on PATH
     import os
     assert "ANTHROPIC_API_KEY" not in os.environ
     assert "ANTHROPIC_API_KEY" not in o.env

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import stat
+import time
 
 import pytest
 
@@ -260,6 +261,11 @@ async def test_a_watcher_that_leaves_is_forgotten(watch_server):
     hub.publish("heard", text="誰もいない")  # nothing to write to: fine
 
 
+# asyncio runs a timer up to the clock's resolution early (15.6 ms on Windows): a 10 ms sleep there
+# would not wait at all, and the publisher would outrun any reader.
+TICK = 0.01 + time.get_clock_info("monotonic").resolution
+
+
 async def test_a_stuck_watcher_is_dropped_without_blocking_the_others(tmp_path):
     hub = control.WatchHub(queue_max=8, now=fixed_now)
     path = endpoint(tmp_path)
@@ -285,11 +291,11 @@ async def test_a_stuck_watcher_is_dropped_without_blocking_the_others(tmp_path):
             t0 = loop.time()
             hub.publish("heard", text=big)
             assert loop.time() - t0 < 0.05  # publishing never waits for a watcher
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(TICK)
         for _ in range(200):
             if len(got) == 60:
                 break
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(TICK)
         assert len(got) == 60  # the reading watcher missed nothing
         assert hub.watchers == 1  # the stuck one was dropped
         fast.cancel()
