@@ -148,3 +148,42 @@ def test_no_terminal_found_prints_command(monkeypatch, capsys):
     assert e.value.code == 1
     assert "/x/ctl watch" in capsys.readouterr().err
     assert f.spawned == []
+
+
+# ---- Windows ----
+
+def test_windows_opens_a_titled_windows_terminal_window(monkeypatch):
+    monkeypatch.setattr(desktop.shutil, "which", lambda n: r"C:\Users\a\AppData\Local\Microsoft\WindowsApps\wt.exe" if n == "wt" else None)
+    f = Fake()
+    looked = []
+    desktop.toggle_window("watch", [r"C:\zj\zundamon-jarvisctl.exe", "watch"], system="windows", run=f.run,
+                          spawn=f.spawn, find_window=lambda t: looked.append(t) or 0, close_window=pytest.fail)
+    (argv, kw), = f.spawned
+    assert argv == [r"C:\Users\a\AppData\Local\Microsoft\WindowsApps\wt.exe", "-w", "new", "new-tab",
+                    "--title", "ZundamonJarvis — watch", "--suppressApplicationTitle",
+                    r"C:\zj\zundamon-jarvisctl.exe", "watch"]
+    assert kw == {} and looked == ["ZundamonJarvis — watch"] and f.runs == []
+
+
+def test_windows_without_windows_terminal_uses_a_new_console(monkeypatch):
+    monkeypatch.setattr(desktop.shutil, "which", lambda n: None)
+    f = Fake()
+    desktop.toggle_window("settings", ["ctl.exe", "settings"], system="windows", spawn=f.spawn,
+                          find_window=lambda t: 0, close_window=pytest.fail)
+    assert f.spawned == [(["ctl.exe", "settings"], {"creationflags": desktop.CREATE_NEW_CONSOLE})]
+
+
+def test_windows_closes_an_open_window_by_its_title(monkeypatch):
+    monkeypatch.setattr(desktop.shutil, "which", lambda n: "wt.exe")
+    f = Fake()
+    closed = []
+    desktop.toggle_window("settings", ["ctl.exe", "settings"], system="windows", spawn=f.spawn,
+                          find_window=lambda t: 0x1234 if t == "ZundamonJarvis — settings" else 0,
+                          close_window=closed.append)
+    assert closed == [0x1234] and f.spawned == []
+
+
+def test_windows_ignores_hyprland_variables(monkeypatch, hypr_env):
+    f = Fake()
+    desktop.toggle_window("watch", CMD, system="windows", run=f.run, spawn=f.spawn, find_window=lambda t: 0)
+    assert f.runs == [] and f.spawned[0][0][0] == "/usr/bin/wt"

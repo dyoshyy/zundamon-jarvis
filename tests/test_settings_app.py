@@ -22,20 +22,29 @@ MICS = [sa.MicSource("cam", "Webcam"), sa.MicSource("bt", "Headset")]
 
 def test_mic_note_warns_about_bluetooth_headset_mics():
     v = sa.View(online=True, mic_device="bluez_input.AA:BB", mic_active="bluez_input.AA:BB")
-    assert "call quality" in sa.mic_note(v)
+    assert "call quality" in sa.mic_note(v, lang="en")
+    assert "通話用の音質" in sa.mic_note(v)
     v = sa.View(online=True, mic_device="alsa_input.cam", mic_active="alsa_input.cam")
-    assert "call quality" not in sa.mic_note(v)
+    assert "call quality" not in sa.mic_note(v, lang="en")
     # following a Bluetooth default input is the same trap
     v = sa.View(online=True, mic_device=None, mic_active=None)
-    assert "call quality" in sa.mic_note(v, default_name="bluez_input.AA")
-    assert "call quality" not in sa.mic_note(v, default_name="alsa_input.cam")
+    assert "call quality" in sa.mic_note(v, default_name="bluez_input.AA", lang="en")
+    assert "call quality" not in sa.mic_note(v, default_name="alsa_input.cam", lang="en")
     off = sa.View(online=False, mic_device="bluez_input.AA")
-    assert sa.mic_note(off).startswith(sa.OFFLINE_NOTE) and "call quality" in sa.mic_note(off)
+    assert sa.mic_note(off, lang="en").startswith("applies on next start") and "call quality" in sa.mic_note(off, lang="en")
 
 def test_mic_note():
-    assert sa.mic_note(sa.View(online=False)) == "applies on next start"
-    assert "Restart" in sa.mic_note(sa.View(online=True, mic_device="cam", mic_active=None))
-    assert "Restart" not in sa.mic_note(sa.View(online=True, mic_device="cam", mic_active="cam"))
+    assert sa.mic_note(sa.View(online=False), lang="en") == "applies on next start"
+    assert sa.mic_note(sa.View(online=False)) == "次の起動から反映"
+    assert "Restart" in sa.mic_note(sa.View(online=True, mic_device="cam", mic_active=None), lang="en")
+    assert "再起動" in sa.mic_note(sa.View(online=True, mic_device="cam", mic_active=None))
+    assert "Restart" not in sa.mic_note(sa.View(online=True, mic_device="cam", mic_active="cam"), lang="en")
+
+
+def test_mic_text_says_system_default_in_the_display_language():
+    assert sa.mic_text(MICS, None, "cam", "en") == "System default (Webcam)"
+    assert sa.mic_text(MICS, None, "cam", "ja") == "システムの既定（Webcam）"
+    assert sa.mic_text(MICS, "cam", "cam", "ja") == "Webcam"
 
 @pytest.mark.parametrize("speed, delta, want", [
     (1.2, +1, 1.3), (1.2, -1, 1.1), (2.0, +1, 2.0), (0.8, -1, 0.8), (1.95, +1, 2.0),
@@ -56,7 +65,8 @@ def test_voice_label():
     groups = sa.voice_groups(SPEAKERS)
     assert sa.voice_label(groups, 0) == "四国めたん / あまあま"
     assert sa.voice_label(groups, 99) == "ID 99"
-    assert sa.voice_label(groups, None) == "青山龍星 / ノーマル (default)"
+    assert sa.voice_label(groups, None, "en") == "青山龍星 / ノーマル (default)"
+    assert sa.voice_label(groups, None) == "青山龍星 / ノーマル（既定）"
     assert sa.voice_label([], 13) == "ID 13"
 
 
@@ -70,10 +80,17 @@ def test_cycle_model():
 
 def test_model_note():
     v = sa.View(online=True, model="opus", session_model="sonnet")
-    assert "Sonnet" in sa.model_note(v) and "Switch now" in sa.model_note(v)
+    assert "Sonnet" in sa.model_note(v, "en") and "Switch now" in sa.model_note(v, "en")
+    assert sa.model_note(v) == "この会話は Sonnet のまま — 「今すぐ切り替え」で反映"
     assert sa.model_note(sa.View(online=True, model="opus", session_model="opus")) == ""
-    assert sa.model_note(sa.View(online=True, model="opus")) == "applies from the next conversation"
-    assert sa.model_note(sa.View(online=False, model="opus")) == "applies on next start"
+    assert sa.model_note(sa.View(online=True, model="opus"), "en") == "applies from the next conversation"
+    assert sa.model_note(sa.View(online=False, model="opus"), "en") == "applies on next start"
+    assert sa.model_label(None, "en") == "CLI default" and sa.model_label(None, "ja") == "CLI の既定"
+
+
+def test_other_language_toggles():
+    assert sa.other_language("ja", 1) == "en" and sa.other_language("en", -1) == "ja"
+    assert sa.other_language("en", 1) == "ja"
 
 
 def test_view_from_reply_and_from_config(tmp_path):
@@ -82,8 +99,9 @@ def test_view_from_reply_and_from_config(tmp_path):
     assert (v.online, v.paused, v.speed, v.speaker_id, v.model, v.session_model) == \
         (True, True, 1.5, 3, "haiku", "sonnet")
     assert sa.View.from_reply({"settings": {"mic_device": "cam", "mic_active": 3}}).mic_active == 3
+    assert sa.View.from_reply({"state": "offline", "reasons": ["mic", 3]}).reasons == ("mic",)
     p = tmp_path / "c.toml"
-    p.write_text("speed = 1.4\nspeaker_id = 2\n")
+    p.write_text("speed = 1.4\nspeaker_id = 2\n", encoding="utf-8")
     v = sa.View.from_config(load_config(p))
     assert (v.online, v.speed, v.speaker_id, v.model) == (False, 1.4, 2, "sonnet")
 
@@ -91,8 +109,9 @@ def test_view_from_reply_and_from_config(tmp_path):
 # ---- client: talks to the daemon, falls back to config.toml ----
 
 class Daemon:
-    def __init__(self, up=True):
+    def __init__(self, up=True, config=None):
         self.up = up
+        self.config = config
         self.sent = []
         self.settings = {"speed": 1.2, "speaker_id": 13, "model": "sonnet", "session_model": None}
 
@@ -108,6 +127,8 @@ class Daemon:
             key = {"speaker": "speaker_id"}.get(words[1], words[1])
             self.settings[key] = float(words[2]) if key == "speed" else (
                 int(words[2]) if key == "speaker_id" else words[2])
+            if key == "language" and self.config is not None:  # the daemon saves it
+                self.config.write_text(f'language = "{words[2]}"\n', encoding="utf-8")
             return {**status, "ok": True, "saved": True, "settings": dict(self.settings)}
         if words[0] == "preview":
             return {**status, "ok": False, "busy": "speaking"}
@@ -130,10 +151,10 @@ def test_client_online_set_goes_to_the_daemon(tmp_path):
 
 def test_client_offline_writes_the_config_and_says_so(tmp_path):
     path = tmp_path / "c.toml"
-    path.write_text('mic_device = "m"\nother = "keep"\n')
+    path.write_text('mic_device = "m"\nother = "keep"\nlanguage = "en"\n', encoding="utf-8")
     c = sa.SettingsClient(request=Daemon(up=False).request, config_path=path)
     view = c.load()
-    assert not view.online and view.speed == 1.2
+    assert not view.online and view.speed == 1.2 and view.lang == "en"
     view, msg = c.set("speed", 1.6)
     assert view.speed == 1.6 and "next start" in msg
     view, msg = c.set("speaker", 3)
@@ -143,8 +164,8 @@ def test_client_offline_writes_the_config_and_says_so(tmp_path):
     view, msg = c.set("mic", "cam")
     assert load_config(path).mic_device == "cam" and view.mic_device == "cam"
     view, msg = c.set("mic", "default")
-    assert load_config(path).mic_device is None and "mic_device" not in path.read_text()
-    assert 'other = "keep"' in path.read_text()
+    assert load_config(path).mic_device is None and "mic_device" not in path.read_text(encoding="utf-8")
+    assert 'other = "keep"' in path.read_text(encoding="utf-8")
     view, msg = c.set("speed", 9)
     assert msg and load_config(path).speed == 1.6
     assert "not running" in c.preview(3, 1.2, "やあ")
@@ -153,21 +174,45 @@ def test_client_offline_writes_the_config_and_says_so(tmp_path):
 
 def test_client_preview_reports_busy(tmp_path):
     d = Daemon()
-    c = sa.SettingsClient(request=d.request, config_path=tmp_path / "c.toml")
+    path = tmp_path / "c.toml"
+    path.write_text('language = "en"\n', encoding="utf-8")
+    c = sa.SettingsClient(request=d.request, config_path=path)
     assert "is speaking" in c.preview(3, 1.2, "この声で話すね。")
     assert d.sent == ["preview 3 1.2 この声で話すね。"]
+    path.write_text('language = "ja"\n', encoding="utf-8")
+    assert c.preview(3, 1.2, "やあ") == "ZundamonJarvis が話しているので試聴できません"
+
+
+def test_client_language_online_and_offline(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('language = "ja"\n', encoding="utf-8")
+    d = Daemon(config=path)
+    c = sa.SettingsClient(request=d.request, config_path=path)
+    view, msg = c.set("language", "en")
+    assert d.sent == ["set language en"] and view.lang == "en" and msg is None
+    d.up = False
+    view, msg = c.set("language", "ja")
+    assert load_config(path).language == "ja" and view.lang == "ja" and not view.online
+    assert msg is None  # shows at once, nothing waits for a restart
+    view, msg = c.set("speed", 1.5)
+    assert msg == "ZundamonJarvis は停止中です — 次の起動から反映"
+    view, msg = c.set("language", "fr")
+    assert msg.startswith("変更できません") and load_config(path).language == "ja"
 
 
 # ---- the app (Textual Pilot) ----
 
 class FakeClient:
-    def __init__(self, online=True):
+    def __init__(self, online=True, lang="en"):
         self.view = sa.View(online=online, state="listening", state_text="Listening",
-                            speed=1.2, speaker_id=13, model="sonnet")
+                            speed=1.2, speaker_id=13, model="sonnet", lang=lang)
         self.calls = []
 
     def load(self):
         return self.view
+
+    def language(self):
+        return self.view.lang
 
     def speakers(self):
         return SPEAKERS
@@ -180,7 +225,7 @@ class FakeClient:
 
     def set(self, key, value):
         self.calls.append(("set", key, value))
-        attr = {"speaker": "speaker_id", "mic": "mic_device"}.get(key, key)
+        attr = {"speaker": "speaker_id", "mic": "mic_device", "language": "lang"}.get(key, key)
         setattr(self.view, attr, None if value == "default" else value)
         return self.view, None
 
@@ -207,7 +252,7 @@ async def test_app_smoke_speed_voice_model_pause_and_close():
         await pilot.press("right", "right")
         await pilot.pause(0.2)
         assert ("set", "speed", 1.3) in client.calls and ("set", "speed", 1.4) in client.calls
-        assert ("preview", 13, 1.4, sa.SPEED_SAMPLE) in client.calls
+        assert ("preview", 13, 1.4, "This is how fast I will talk.") in client.calls
         # voice: Enter opens the list; moving previews; Enter picks
         client.calls.clear()
         await pilot.press("down", "enter")
@@ -216,7 +261,7 @@ async def test_app_smoke_speed_voice_model_pause_and_close():
         await pilot.press("down")
         await pilot.pause(0.2)
         previews = [c for c in client.calls if c[0] == "preview"]
-        assert previews and previews[-1][2] == 1.4 and previews[-1][3] == sa.VOICE_SAMPLE
+        assert previews and previews[-1][2] == 1.4 and previews[-1][3] == "This is the voice I will use."
         await pilot.press("enter")
         await pilot.pause()
         assert not isinstance(app.screen, sa.VoiceScreen)
@@ -261,6 +306,35 @@ async def test_app_offline_shows_the_note():
     async with app.run_test(size=(64, 22)) as pilot:
         await pilot.pause()
         assert "next start" in str(app.query_one("#status").render())
+
+
+def _shown(app, selector):
+    return str(app.query_one(selector).render())
+
+
+async def test_app_language_row_redraws_the_window_at_once():
+    client = FakeClient(lang="ja")
+    app = sa.SettingsApp(client, preview_delay=0.05)
+    async with app.run_test(size=(70, 24)) as pilot:
+        await pilot.pause()
+        assert _shown(app, "#title") == "ZundamonJarvis 設定" and "閉じる" in _shown(app, "#keys")
+        assert "聞き取り中" in _shown(app, "#status")
+        rows = app.query_one("#rows")
+        rows.highlighted = sa.ROWS.index("language")
+        await pilot.pause()
+        assert "表示言語" in str(rows.get_option("language").prompt) and "日本語" in str(rows.get_option("language").prompt)
+        assert "メニュー" in _shown(app, "#hint")
+        await pilot.press("right")
+        await pilot.pause()
+        assert ("set", "language", "en") in client.calls
+        assert _shown(app, "#title") == "ZundamonJarvis Settings" and "Close" in _shown(app, "#keys")
+        assert "Listening" in _shown(app, "#status")
+        assert "English" in str(rows.get_option("language").prompt)
+        assert "Voice speed" in str(rows.get_option("speed").prompt)
+        assert "menus" in _shown(app, "#hint")
+        await pilot.press("left")
+        await pilot.pause()
+        assert client.calls[-1] == ("set", "language", "ja") and "話す速さ" in str(rows.get_option("speed").prompt)
 
 
 async def test_polls_and_messages_while_the_voice_list_is_open_do_not_break_it():

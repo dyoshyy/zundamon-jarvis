@@ -30,14 +30,17 @@ def test_service_and_engine_dispatch(monkeypatch):
 
 def test_setup_doctor_models_uninstall_dispatch(monkeypatch):
     seen = []
+    monkeypatch.setattr("zundamon_jarvis.setup_gui.run_gui", lambda: seen.append(("setup", "gui")) or 0)
     monkeypatch.setattr("zundamon_jarvis.setup_wizard.main", lambda argv: seen.append(("setup", argv)) or 0)
     monkeypatch.setattr("zundamon_jarvis.setup_wizard.uninstall_main", lambda argv: seen.append(("uninstall", argv)) or 0)
     monkeypatch.setattr("zundamon_jarvis.doctor.main", lambda argv: seen.append(("doctor", argv)) or 0)
     monkeypatch.setattr("zundamon_jarvis.stt.download_model", lambda: seen.append(("models", None)) or "/cache/m")
-    for argv in (["setup"], ["doctor"], ["models", "download"], ["uninstall"]):
+    for argv in (["setup"], ["setup", "--cli"], ["doctor"], ["models", "download"], ["uninstall"]):
         assert cli.main(argv) == 0
-    assert [s[0] for s in seen] == ["setup", "doctor", "models", "uninstall"]
+    assert seen[:2] == [("setup", "gui"), ("setup", [])]
+    assert [s[0] for s in seen[2:]] == ["doctor", "models", "uninstall"]
     assert cli.main(["models"]) == 2
+    assert cli.main(["setup", "--bogus"]) == 2
 
 
 def test_models_download_failure_is_reported(monkeypatch, capsys):
@@ -52,3 +55,39 @@ def test_models_download_failure_is_reported(monkeypatch, capsys):
 def test_version_flag(capsys):
     assert cli.main(["--version"]) == 0
     assert capsys.readouterr().out.strip().count(".") >= 1
+
+
+def test_tray_and_supervise_dispatch(monkeypatch):
+    seen = []
+    monkeypatch.setattr("zundamon_jarvis.tray.run_tray", lambda: seen.append("tray") or 0)
+    monkeypatch.setattr("zundamon_jarvis.supervisor.main", lambda argv: seen.append(("supervise", argv)) or 0)
+    assert cli.main(["tray"]) == 0
+    assert cli.main(["supervise"]) == 0
+    assert seen == ["tray", ("supervise", [])]
+
+
+def test_service_start_stop_on_windows(monkeypatch, capsys):
+    monkeypatch.setattr("zundamon_jarvis.platform.system", lambda: "windows")
+    monkeypatch.setattr("zundamon_jarvis.service.start_services", lambda s: True)
+    monkeypatch.setattr("zundamon_jarvis.service.stop_services", lambda s: "stopped")
+    assert cli.main(["service", "start"]) == 0
+    assert cli.main(["service", "stop"]) == 0
+    assert capsys.readouterr().out.split() == ["started", "stopped"]
+
+
+def test_service_start_stop_elsewhere_points_to_the_service_manager(monkeypatch, capsys):
+    monkeypatch.setattr("zundamon_jarvis.platform.system", lambda: "linux")
+    assert cli.main(["service", "stop"]) == 2
+    assert "systemctl --user" in capsys.readouterr().err
+
+
+def test_models_download_speaks_the_display_language(monkeypatch, capsys):
+    from zundamon_jarvis import i18n
+
+    monkeypatch.setattr("zundamon_jarvis.stt.download_model", lambda: "/cache/m")
+    assert cli.main(["models", "download"]) == 0
+    assert "モデルの準備ができました: /cache/m" in capsys.readouterr().out
+    monkeypatch.setattr(i18n, "language", lambda config_path=None: "en")
+    assert cli.main(["models", "download"]) == 0
+    out = capsys.readouterr().out
+    assert "Downloading the speech-to-text model" in out and "The model is ready: /cache/m" in out

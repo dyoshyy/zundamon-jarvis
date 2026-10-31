@@ -2,214 +2,121 @@
 
 English | [日本語](#日本語)
 
-A hands-free voice assistant for [Claude Code](https://claude.com/claude-code), voiced by
-VOICEVOX's Zundamon. You talk, it listens (speech-to-text runs locally), asks Claude Code, and
-answers out loud in short spoken sentences. It runs as a background service and has a small
-control surface (menu bar on macOS, `zundamon-jarvisctl` and an optional bar module on Linux).
+A hands-free voice assistant for [Claude Code](https://claude.com/claude-code), voiced by VOICEVOX's Zundamon.
+You talk, it transcribes locally, asks Claude Code, and answers out loud.
 
-Supported environments: **linux-x86_64** and **macos-arm64** only.
+- **Runs on:** macOS 14+ on Apple Silicon (beta), Windows 10/11 x64 (beta), Linux x86_64 with an NVIDIA GPU.
+- **Needs:** [Claude Code](https://claude.com/claude-code), logged in (run `claude` once), and about 8 GB of free disk.
+- **Language:** it listens and speaks in Japanese. The screens are in Japanese or English.
+- **Headphones recommended:** through speakers, the mic would hear her, so you can't interrupt her.
 
-## Requirements
+## Install
 
-- **Mac:** Apple Silicon (M1 or later) with **macOS 14 Sonoma or later** (the onnxruntime wheels need it).
-  Intel Macs are not supported. **Mac support is beta.**
-- **Linux:** x86_64 with an **NVIDIA CUDA GPU** (speech-to-text and VOICEVOX run on the GPU), PipeWire, systemd user session (see [Linux](#linux)).
-- **Japanese only:** speech recognition, the voice, and the built-in prompts are Japanese; other languages are not supported.
-- [Claude Code](https://claude.com/claude-code) installed and **logged in** (run `claude` once).
-- About 8 GB of free disk (VOICEVOX engine and the speech-to-text model).
-- **Headphones are recommended.** Without echo cancellation the mic would hear Zundamon, so the ears
-  are muted while she speaks, and you cannot interrupt her through speakers.
-
-## Install (Mac)
+**Mac**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.sh | sh
 ```
 
-The installer sets up uv, the VOICEVOX engine and the STT model, then runs `zundamon-jarvis setup`
-(login check, microphone permission, headphone advice, voice choice, knowledge folder, model, always-on
-service). Re-running it is safe; finished steps are skipped. A step-by-step walkthrough in Japanese is in
-[docs/mac-checklist.md](docs/mac-checklist.md).
+**Windows** (PowerShell, no admin rights needed)
 
-## Usage
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.ps1 | iex"
+```
 
-On macOS a menu bar icon shows the state (listening, thinking, speaking, paused, daemon down). Its menu
-has **Pause / Resume**, **Conversation…** (a live view of what was heard and said) and **Settings…**
-(voice speed, voice, model, microphone). Quitting the menu bar app leaves the daemon running.
-
-From a shell (both platforms):
-
-- `zundamon-jarvisctl toggle | pause | resume | status`
-- `zundamon-jarvisctl watch` streams the conversation; `zundamon-jarvisctl settings` opens the settings window
-- `zundamon-jarvisctl get` / `set speed|speaker|model|mic <value>`
-- `zundamon-jarvis setup` re-runs the wizard; `zundamon-jarvis doctor` prints a diagnostic report;
-  `zundamon-jarvis uninstall` removes the service and its files
-
-## Configuration
-
-`config.toml` keys (all optional; comments and unknown keys are kept when the tool edits the file):
-
-| key | meaning |
-|---|---|
-| `workdir` | Directory Claude Code runs in, so its `CLAUDE.md`, memory and hooks apply. Default: your home directory. |
-| `knowledge_dir` | Optional notes folder (for example `~/notes`). Given to the Claude session as an extra directory (its `CLAUDE.md` loads too), so it can read and write your notes. Unset = none. |
-| `model` | `sonnet` (default), `opus` or `haiku`. Applies from the next session. |
-| `speed` | VOICEVOX speed, 0.8 to 2.0 (default 1.2). |
-| `speaker_id` | VOICEVOX style id (the voice). Audition with `zundamon-jarvis voices`. |
-| `mic_device` | Input device: a source name or a PortAudio device index. Unset = follow the OS default input. |
-| `duplex` | `auto` (default), `full` (always listening) or `half` (mic ignored while she speaks, no barge-in). `auto` means `half` only on a Mac playing through its built-in speakers (always `full` on Linux). |
-
-| | Linux | macOS |
-|---|---|---|
-| config | `~/.config/zundamon-jarvis/config.toml` | `~/Library/Application Support/zundamon-jarvis/config.toml` |
-| data (engine, models) | `~/.local/share/zundamon-jarvis/` | `~/Library/Application Support/zundamon-jarvis/` |
-| logs / conversation log | `~/.local/state/zundamon-jarvis/` | `~/Library/Logs/zundamon-jarvis/` |
-| service | systemd user units | LaunchAgents in `~/Library/LaunchAgents/` |
+The installer opens the setup window. It downloads the voice engine and the speech model, then walks you
+through the login check, mic, voice, notes folder and model, and starts the background service. Running
+the same line again is safe. To run setup again later, use `zundamon-jarvis setup` (`--cli` runs it in the terminal).
 
 ## Linux
 
-There is no one-line installer on Linux. You need `uv`, `claude`, an NVIDIA CUDA GPU, PipeWire (with `pactl`)
-and a systemd user session. **Clone to `~/repos/zundamon-jarvis`**: the systemd unit runs
-`~/repos/zundamon-jarvis/.venv/bin/zundamon-jarvis`.
+Clone to `~/repos/zundamon-jarvis` (the systemd unit runs from there). You need `uv`, PipeWire and a systemd user session.
 
 ```sh
-mkdir -p ~/repos && git clone https://github.com/dyoshyy/zundamon-jarvis ~/repos/zundamon-jarvis
-cd ~/repos/zundamon-jarvis
-uv sync
-uv run zundamon-jarvis engine install    # downloads the VOICEVOX engine (add --cpu for the CPU build)
-uv run zundamon-jarvis models download   # downloads the speech-to-text model
-uv run zundamon-jarvis setup             # wizard; installs and starts the systemd user units
+git clone https://github.com/dyoshyy/zundamon-jarvis ~/repos/zundamon-jarvis
+cd ~/repos/zundamon-jarvis && uv sync && uv run zundamon-jarvis setup
 ```
 
-By hand instead of the wizard's service step: copy `deploy/systemd/*.service` to `~/.config/systemd/user/`, run
-`systemctl --user daemon-reload`, then `systemctl --user enable --now voicevox zundamon-jarvis`.
-Logs: `journalctl --user -u zundamon-jarvis`. `zundamon-jarvis uninstall` stops and removes the systemd units.
+Echo cancellation (so you can use speakers) and the Hyprland bar module are optional; see [docs/reference.md](docs/reference.md).
 
-Optional echo cancellation (PipeWire WebRTC AEC, lets you use speakers): `deploy/install-audio.sh`,
-then set `mic_device = "zundamon_jarvis_aec_source"`. Edit
-`deploy/pipewire/zundamon-jarvis-echo-cancel.conf` first if you want to pin a specific microphone.
+## Use
 
-Optional Omarchy/Hyprland integration (outside this repo, in your own config): bind a key to
-`zundamon-jarvisctl toggle`, add a command module to the bar that runs `zundamon-jarvisctl bar`
-(click: `zundamon-jarvisctl window`, right-click: `zundamon-jarvisctl window settings`), and float the
-windows with classes `zundamon-jarvis-watch` and `zundamon-jarvis-settings`.
+- **Mac:** the menu bar icon. **Windows:** the tray icon. Both offer Pause/Resume, Conversation and Settings.
+- **Any OS:**
+  - `zundamon-jarvisctl toggle | status | watch | settings`
+  - `zundamon-jarvis doctor` gives a diagnostic report with personal data removed.
+- **Update:** `zundamon-jarvis update`. On Mac and Windows the menu also offers it when a new version is out.
+- **Display language:** set it on the setup page or in Settings, or with `language = "ja" | "en"` in `config.toml`.
+  If it isn't set, the OS language is used.
+
+Before sending messages or mail, changing your calendar, deleting things, spending money, `sudo` or a force
+push, she asks you out loud first. Anything other than a clear "yes" cancels.
 
 ## Privacy
 
-- **Speech-to-text is local** (faster-whisper on Linux, mlx-whisper on Mac). Your audio never leaves the machine.
-- What is sent to Claude: the **text** of what you said, and whatever Claude Code reads or runs while
-  answering you in `workdir`, exactly as in a normal Claude Code session (under your own Claude account).
-  Zundamon's text-to-speech runs in the local VOICEVOX engine.
-- The conversation log stays on your machine (see the table above) and old days are deleted after 14 days.
-- `zundamon-jarvis doctor` redacts its report before printing: speech and conversation text, user and host
-  names, home and `knowledge_dir` paths, and e-mail addresses are removed, so it is safe to paste into an issue.
+- Speech-to-text runs locally. Your audio never leaves the machine.
+- Claude only gets the text of what you said. It works the same as a normal Claude Code session in your `workdir`.
+- The conversation log stays on your machine and is deleted after 14 days.
 
-## Voice confirmation policy
+## Credits and license
 
-Most things run without asking: reading and writing files, running commands, looking things up. Before
-these, Zundamon asks a spoken yes/no question: sending e-mail or messages to people, creating, changing
-or deleting calendar events, deleting files or data, anything involving money, `sudo`, and force pushes.
-Answering "no" (or anything unclear) cancels the action.
+- Voice: [VOICEVOX](https://voicevox.hiroshiba.jp/) and **Zundamon (ずんだもん)**. Follow the
+  [VOICEVOX terms](https://voicevox.hiroshiba.jp/term/) and each character's own terms. Published audio needs a
+  credit such as **「VOICEVOX:ずんだもん」**. VOICEVOX is not bundled; the installer downloads the official release.
+- VAD: [Silero VAD](https://github.com/snakers4/silero-vad) (MIT). Speech-to-text: Whisper via faster-whisper / mlx-whisper.
+- [MIT](LICENSE) © 2026 dyoshyy. The license covers this code only, not VOICEVOX, its voices or the character.
 
-## Troubleshooting
-
-- **No reaction / "mic unavailable" (Mac):** System Settings > Privacy & Security > Microphone, turn on
-  **python3.12** (the daemon's name) as well as your terminal. Then `zundamon-jarvisctl status`.
-- **Not logged in:** run `claude` in a terminal and log in.
-- **She hears herself:** use headphones, or on Linux install the optional echo cancellation.
-- **Anything else:** run `zundamon-jarvis doctor` and attach its (redacted) output to an issue.
-
-## Credits and terms
-
-- Voice: **[VOICEVOX](https://voicevox.hiroshiba.jp/)** engine and the character **Zundamon (ずんだもん)**.
-  Read the [VOICEVOX terms of use](https://voicevox.hiroshiba.jp/term/). **Each character has its own
-  terms of use** as well. If you publish audio made with this tool (videos, streams, posts), you must
-  credit it, for example **「VOICEVOX:ずんだもん」**. This repository does not include VOICEVOX or any voice data;
-  the installer downloads the engine from its official release.
-- Voice activity detection: the [Silero VAD](https://github.com/snakers4/silero-vad) model
-  (`silero_vad_v6.onnx`, MIT License; text in `src/zundamon_jarvis/assets/LICENSE-silero`).
-- Speech-to-text models: Whisper (OpenAI, MIT) through faster-whisper / mlx-whisper.
-
-## License
-
-[MIT](LICENSE), copyright (c) 2026 dyoshyy. The licence covers this code only, not VOICEVOX, its voices
-or the Zundamon character.
+Settings, file locations, the Windows service and troubleshooting are in [docs/reference.md](docs/reference.md).
 
 ---
 
 # 日本語
 
-[Claude Code](https://claude.com/claude-code) を声で操作するための、VOICEVOX ずんだもんの音声アシスタントです。
-話しかけると（文字起こしはローカルで実行）、Claude Code に聞いて、短い話し言葉で答えてくれます。
-常駐サービスとして動き、Mac ではメニューバー、Linux では `zundamon-jarvisctl`（と任意のバーモジュール）で操作します。
+[Claude Code](https://claude.com/claude-code) を声で使える、VOICEVOX ずんだもんの音声アシスタントです。
+話しかけると、手元で文字にして Claude Code に聞き、声で答えます。
 
-対応環境は **linux-x86_64** と **macos-arm64** のみです。
+- **対応環境:** macOS 14 以降の Apple シリコン Mac（ベータ）、Windows 10 / 11 の x64（ベータ）、NVIDIA GPU のある Linux x86_64。
+- **必要なもの:** [Claude Code](https://claude.com/claude-code) にログイン済みであること（`claude` を一度起動）と、8 GB ほどの空き容量。
+- **言語:** 聞き取りと話す声は日本語です。画面の表示は日本語と英語を選べます。
+- **ヘッドホン推奨:** スピーカーだと声をマイクが拾うので、話している途中で割り込めません。
 
-## 必要なもの
+## インストール
 
-- **Mac:** Apple シリコン（M1 以降）と **macOS 14 Sonoma 以降**（onnxruntime の都合）。Intel Mac は非対応。**Mac 対応はベータ版です。**
-- **Linux:** x86_64 と **NVIDIA の CUDA GPU**（文字起こしと VOICEVOX は GPU で動かします）、PipeWire、systemd のユーザーセッション（[Linux](#linux) 参照）。
-- **日本語専用:** 音声認識・声・内蔵プロンプトはすべて日本語です。他の言語には対応していません。
-- [Claude Code](https://claude.com/claude-code) をインストールし、**ログイン済み**であること（一度 `claude` を起動）。
-- ディスクの空き 8 GB 程度（VOICEVOX エンジンと文字起こしモデル）。
-- **ヘッドホン推奨。** スピーカーだとずんだもんの声をマイクが拾うので、話している間は聞き取りを止めます（割り込めません）。
+上の Install にあるコマンドを、Mac はターミナル、Windows は PowerShell で実行します。
 
-## インストール（Mac）
+すると設定画面が開き、次のことをこの順で行います。
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.sh | sh
-```
+1. 声のエンジンと文字起こしのモデルをダウンロードする
+2. ログインを確認する
+3. マイク、声、メモのフォルダ、モデルを選ぶ
+4. 常駐を始める
 
-uv、VOICEVOX エンジン、文字起こしモデルを用意し、`zundamon-jarvis setup`（ログイン確認、マイク許可、声選び、
-知識フォルダ、モデル、常駐設定）まで進みます。途中で止まっても同じ 1 行で続きから進みます。
-詳しい手順は [docs/mac-checklist.md](docs/mac-checklist.md) を見てください。
+何度実行しても大丈夫です。あとから設定し直すときは `zundamon-jarvis setup` を使います（`--cli` を付けるとターミナルで設定します）。
+
+Linux では、上の Linux の手順どおりに `~/repos/zundamon-jarvis` に clone して `uv sync` と `setup` を実行します。
 
 ## 使い方
 
-Mac ではメニューバーのアイコンが状態を表し、メニューから **Pause / Resume**、**Conversation…**（会話のライブ表示）、
-**Settings…**（速度・声・モデル・マイク）を開けます。メニューバーを終了しても常駐は止まりません。
-シェルからは `zundamon-jarvisctl toggle|pause|resume|status|watch|settings|get|set`、`zundamon-jarvis setup|doctor|uninstall` が使えます。
+- **Mac:** メニューバーのアイコン。**Windows:** タスクトレイのアイコン。どちらも一時停止、会話の表示、設定ができます。
+- **どの OS でも:**
+  - `zundamon-jarvisctl toggle | status | watch | settings`
+  - `zundamon-jarvis doctor` は診断を出力します。個人情報は伏せてあります。
+- **更新:** `zundamon-jarvis update`。Mac と Windows では、新しい版が出るとメニューにも出ます。
+- **表示言語:** 設定画面か設定ウィンドウで選びます。`config.toml` の `language = "ja" | "en"` でも指定できます。
+  指定しないときは OS の言語になります。
 
-## 設定
-
-`config.toml` のキー（すべて任意）: `workdir`（Claude Code を動かすディレクトリ。既定はホーム）、
-`knowledge_dir`（メモのフォルダ。例 `~/notes`。Claude に追加ディレクトリとして渡す。未設定なら使わない）、`model`（`sonnet`/`opus`/`haiku`）、
-`speed`（0.8〜2.0、既定 1.2）、`speaker_id`（声）、`mic_device`（入力デバイス。未設定ならOS既定）、`duplex`（`auto`/`full`/`half`。`half` は話している間マイクを無視）。
-
-置き場所は Linux が `~/.config/zundamon-jarvis/config.toml`、Mac が `~/Library/Application Support/zundamon-jarvis/config.toml`。
-ログは Linux が `~/.local/state/zundamon-jarvis/`、Mac が `~/Library/Logs/zundamon-jarvis/`。
-
-## Linux
-
-1 行インストーラはありません。`uv`、`claude`、PipeWire（`pactl`）、systemd ユーザーセッションを用意し、
-`~/repos/zundamon-jarvis` に clone し、上の English の [Linux](#linux) の手順（`uv sync`、`engine install`、`models download`、`setup`）で入れます。
-`zundamon-jarvis uninstall` は systemd のユニットも削除します。Omarchy/Hyprland との連携とエコーキャンセルは任意です。
+メッセージやメールの送信、カレンダーの変更、削除、お金のこと、`sudo`、force push の前には、声で確認します。
+はっきり「はい」と答えたとき以外は中止します。
 
 ## プライバシー
 
-- **文字起こしはローカル**で行い、音声は外に出ません。
-- Claude に送られるのは、話した内容の**テキスト**と、`workdir` で Claude Code が読んだり実行したりした内容です（通常の Claude Code と同じ）。
-- 会話ログは手元にだけ保存され、14 日で消えます。
-- `zundamon-jarvis doctor` は、会話内容・ユーザー名・ホスト名・パス・メールアドレスを伏せて出力するので、そのまま Issue に貼れます。
+- 文字起こしは手元で行います。音声は外に出ません。
+- Claude に送られるのは、話した内容のテキストだけです。`workdir` で動く、普通の Claude Code と同じです。
+- 会話ログは手元にだけ残り、14 日で消えます。
 
-## 声での確認ルール
+## クレジット
 
-ファイルの読み書きやコマンド実行は確認なしで動きます。次のときだけ声で「はい／いいえ」を聞きます:
-メールやメッセージの送信、カレンダーの作成・変更・削除、ファイルやデータの削除、お金に関わること、`sudo`、force push。
-「いいえ」や聞き取れない返事は中止になります。
+音声は [VOICEVOX](https://voicevox.hiroshiba.jp/) とずんだもんです。[利用規約](https://voicevox.hiroshiba.jp/term/)とキャラクターごとの規約に従ってください。
+音声を公開するときは「VOICEVOX:ずんだもん」のように表記してください。ライセンスは [MIT](LICENSE) です。
 
-## うまくいかないとき
-
-- Mac で反応しない: システム設定 > プライバシーとセキュリティ > マイク で **python3.12** をオンにする。
-- ログインしていない: ターミナルで `claude` を実行してログインする。
-- 自分の声を拾う: ヘッドホンを使う（Linux は任意のエコーキャンセルも可）。
-- それ以外: `zundamon-jarvis doctor` の出力を添えて Issue へ。
-
-## クレジットと利用規約
-
-- 音声は **[VOICEVOX](https://voicevox.hiroshiba.jp/)** と キャラクター **ずんだもん** です。
-  [VOICEVOX 利用規約](https://voicevox.hiroshiba.jp/term/)を確認してください。**キャラクターごとに個別の利用規約**があります。
-  生成した音声を公開する場合は、**「VOICEVOX:ずんだもん」** のようにクレジット表記が必要です。
-  このリポジトリに VOICEVOX や音声データは含まれず、インストーラが公式のリリースから取得します。
-- 音声区間検出に [Silero VAD](https://github.com/snakers4/silero-vad)（MIT License）を同梱しています。
-- ライセンスは [MIT](LICENSE)（Copyright (c) 2026 dyoshyy）。VOICEVOX・音声・ずんだもんには及びません。
+設定の一覧、ファイルの置き場所、Windows の常駐の仕組み、うまくいかないときの対処は [docs/reference.md](docs/reference.md) にあります。

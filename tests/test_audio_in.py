@@ -131,7 +131,7 @@ async def test_stream_parameters_and_pulse_device_resolution(monkeypatch):
             seen_env.append(os.environ.get("PULSE_SOURCE"))
             super().__init__(**kw)
 
-    a = AudioIn(device="zundamon_jarvis_aec_source", rate=16000, stream_factory=Spy, source_names=lambda: None)
+    a = AudioIn(system="linux", device="zundamon_jarvis_aec_source", rate=16000, stream_factory=Spy, source_names=lambda: None)
     a.open()
     kw = FakeInputStream.instances[-1].kw
     assert kw["samplerate"] == 16000 and kw["channels"] == 1 and kw["dtype"] == "float32"
@@ -147,7 +147,7 @@ async def test_pulse_source_is_restored_even_if_factory_raises(monkeypatch):
     def boom(**kw):
         raise RuntimeError("no device")
 
-    a = AudioIn(stream_factory=boom)
+    a = AudioIn(system="linux", stream_factory=boom)
     with pytest.raises(RuntimeError):
         a.open()
     assert os.environ["PULSE_SOURCE"] == "other"
@@ -162,7 +162,7 @@ async def test_default_device_follows_the_os_default_input(monkeypatch):
             seen.append(os.environ.get("PULSE_SOURCE"))
             super().__init__(**kw)
 
-    a = AudioIn(stream_factory=Spy)
+    a = AudioIn(system="linux", stream_factory=Spy)
     a.open()
     assert seen == [None]  # no PULSE_SOURCE: pipewire-pulse picks its default source
     kw = FakeInputStream.instances[-1].kw
@@ -179,7 +179,7 @@ async def test_integer_device_is_passed_through():
 
 @pytest.mark.integration
 async def test_real_aec_source_delivers_frames():
-    a = AudioIn(source_names=lambda: None)
+    a = AudioIn(system="linux", source_names=lambda: None)
     a.open()
     try:
         f = await asyncio.wait_for(a.frames().__anext__(), 2)
@@ -198,7 +198,7 @@ async def test_a_missing_named_mic_falls_back_to_the_os_default(monkeypatch, cap
             raise OSError("source not found")
         return FakeInputStream(**kw)
 
-    a = AudioIn(device="gone", stream_factory=factory, source_names=lambda: None)
+    a = AudioIn(system="linux", device="gone", stream_factory=factory, source_names=lambda: None)
     assert a.fallback is False
     a.open()
     assert seen == [("pulse", "gone"), ("pulse", None)]
@@ -219,7 +219,7 @@ async def test_the_named_mic_is_tried_again_on_every_open(monkeypatch):
             raise OSError("gone")
         return FakeInputStream(**kw)
 
-    a = AudioIn(device="cam", stream_factory=factory, source_names=lambda: None)
+    a = AudioIn(system="linux", device="cam", stream_factory=factory, source_names=lambda: None)
     a.open()
     assert a.fallback is True
     a.close()
@@ -233,7 +233,7 @@ async def test_a_failing_default_mic_still_raises():
     def boom(**kw):
         raise OSError("no mic at all")
 
-    a = AudioIn(device="cam", stream_factory=boom, source_names=lambda: None)
+    a = AudioIn(system="linux", device="cam", stream_factory=boom, source_names=lambda: None)
     with pytest.raises(OSError):
         a.open()
     assert a.fallback is False
@@ -247,7 +247,7 @@ async def test_a_named_mic_not_listed_by_pactl_falls_back_without_trying_it(monk
         seen.append(os.environ.get("PULSE_SOURCE"))
         return FakeInputStream(**kw)
 
-    a = AudioIn(device="gone", stream_factory=factory, source_names=lambda: {"alsa_input.cam"})
+    a = AudioIn(system="linux", device="gone", stream_factory=factory, source_names=lambda: {"alsa_input.cam"})
     a.open()
     assert seen == [None] and a.fallback is True  # pipewire-pulse would have served the default silently
     assert "gone" in caplog.text
@@ -262,14 +262,14 @@ async def test_a_listed_named_mic_is_used(monkeypatch):
         seen.append(os.environ.get("PULSE_SOURCE"))
         return FakeInputStream(**kw)
 
-    a = AudioIn(device="cam", stream_factory=factory, source_names=lambda: {"cam"})
+    a = AudioIn(system="linux", device="cam", stream_factory=factory, source_names=lambda: {"cam"})
     a.open()
     assert seen == ["cam"] and a.fallback is False
     a.close()
 
 
 async def test_the_missing_mic_warning_is_rate_limited(caplog):
-    a = AudioIn(device="gone", stream_factory=FakeInputStream, source_names=lambda: set())
+    a = AudioIn(system="linux", device="gone", stream_factory=FakeInputStream, source_names=lambda: set())
     for _ in range(4):
         a.open()
         a.close()
@@ -360,4 +360,59 @@ async def test_open_waits_for_a_slow_but_finishing_close():
     a.close()
     a.open()  # the first close finishes quickly: no complaint
     assert len(FakeInputStream.instances) == 2
+    a.close()
+
+
+# ---- Windows (MME devices through sounddevice; no PipeWire) ----
+
+async def test_windows_opens_portaudio_devices_and_never_pulse(monkeypatch):
+    monkeypatch.delenv("PULSE_SOURCE", raising=False)
+    seen = []
+
+    class Spy(FakeInputStream):
+        def __init__(self, **kw):
+            seen.append((kw["device"], os.environ.get("PULSE_SOURCE")))
+            super().__init__(**kw)
+
+    a = AudioIn(system="windows", stream_factory=Spy)  # mic_device None: the Sound Mapper
+    a.open()
+    a.close()
+    b = AudioIn(device="Microphone (Realtek(R) Audio)", system="windows", stream_factory=Spy,
+                source_names=lambda: {"Microphone (Realtek(R) Audio)"},
+                input_index=lambda name: 1 if name == "Microphone (Realtek(R) Audio)" else None)
+    b.open()
+    b.close()
+    c = AudioIn(device=12, system="windows", stream_factory=Spy)
+    c.open()
+    c.close()
+    assert seen == [(None, None), (1, None), (12, None)]
+    assert "PULSE_SOURCE" not in os.environ and not b.fallback
+    kw = FakeInputStream.instances[-1].kw
+    assert kw["samplerate"] == 16000 and kw["channels"] == 1 and kw["dtype"] == "float32"
+
+
+async def test_windows_default_name_lookup_is_the_mme_one(monkeypatch):
+    from zundamon_jarvis import audio_in
+
+    asked = []
+    monkeypatch.setattr(audio_in, "input_device_index",
+                        lambda name, **kw: asked.append((name, kw)) or 4)
+    a = AudioIn(device="USB Mic", system="windows", stream_factory=FakeInputStream,
+                source_names=lambda: None)
+    a.open()
+    assert FakeInputStream.instances[-1].kw["device"] == 4
+    assert asked == [("USB Mic", {"system": "windows"})]
+    a.close()
+
+
+async def test_windows_index_of_a_rate_refusing_host_api_falls_back(caplog):
+    def factory(**kw):
+        if kw["device"] == 12:  # e.g. a WASAPI index: shared mode refuses 16 kHz
+            raise OSError("Invalid sample rate [PaErrorCode -9997]")
+        return FakeInputStream(**kw)
+
+    a = AudioIn(device=12, system="windows", stream_factory=factory)
+    a.open()
+    assert FakeInputStream.instances[-1].kw["device"] is None and a.fallback
+    assert "could not be opened" in caplog.text
     a.close()

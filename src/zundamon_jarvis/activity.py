@@ -5,10 +5,13 @@ The daemon wires its hooks here (heard transcripts, the orchestrator's ``on_say`
 the control socket's ``WatchHub``:
 
 - ``heard {text}``, ``said {text, what}`` (what: reply / filler / question / notice)
-- ``tool {label, sub}``: one English line from ``labels.tool_label``, never the input;
-  ``sub`` is true for a subagent's tool use
+- ``tool {label, labels, sub}``: one English line from ``labels.tool_label``, never the input;
+  ``labels`` is that line in every display language (``{"ja": ..., "en": ...}``: the window
+  picks its own, so the history follows a language switch); ``sub`` is true for a subagent's
+  tool use
 - ``confirm {question, ok, why}`` (why: answer / unclear / timeout)
-- ``state {state, text}``: only paused / limit / offline and the return to listening;
+- ``state {state, text[, reasons]}`` (``control.status_of``; the window labels it with
+  ``control.status_label``): only paused / limit / offline and the return to listening;
   thinking / speaking would flood the window
 - ``thinking {on}``: the brain started / stopped working on a turn (the window shows a spinner,
   never a line)
@@ -22,6 +25,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from zundamon_jarvis.brain import TaskDone, ToolUse
+from zundamon_jarvis.config import LANGUAGES
 from zundamon_jarvis.control import status_of
 from zundamon_jarvis.labels import tool_label
 
@@ -68,11 +72,11 @@ class ActivityFeed:
     def brain_event(self, ev: Any) -> None:
         if isinstance(ev, ToolUse):
             try:
-                label = tool_label(ev.name, ev.input)
+                labels = {lang: tool_label(ev.name, ev.input, lang) for lang in LANGUAGES}
             except Exception:
                 log.exception("tool_label failed for %s", ev.name)
-                label = f"🔧 {ev.name}"
-            self._emit("tool", label=label, sub=ev.agent_id is not None)
+                labels = {lang: f"🔧 {ev.name}" for lang in LANGUAGES}
+            self._emit("tool", label=labels["en"], labels=labels, sub=ev.agent_id is not None)
         elif isinstance(ev, TaskDone):
             summary = " ".join((ev.summary or "").split())
             if len(summary) > SUMMARY_MAX:
@@ -88,7 +92,7 @@ class ActivityFeed:
             return
         self._mode = mode
         try:
-            text = status_of(mode, self._reasons())["text"]
+            status = status_of(mode, self._reasons())
         except Exception:
-            text = mode
-        self._emit("state", state=mode, text=text)
+            status = {"state": mode, "text": mode}
+        self._emit("state", **{k: v for k, v in status.items() if k in ("state", "text", "reasons")})

@@ -20,9 +20,9 @@ def test_check_public_catches_forbidden_and_secret_strings(tmp_path):
     env = {"GIT_CONFIG_GLOBAL": "/dev/null", "PATH": "/usr/bin:/bin"}
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
     pats = tmp_path / "pats"
-    pats.write_text("# synthetic\nforbidden-token-xyz\n")
-    (repo / "a.txt").write_text("clean\nhas FORBIDDEN-token-XYZ here\n")
-    (repo / "b.txt").write_text("key sk-" "ant-abc123\n")
+    pats.write_text("# synthetic\nforbidden-token-xyz\n", encoding="utf-8")
+    (repo / "a.txt").write_text("clean\nhas FORBIDDEN-token-XYZ here\n", encoding="utf-8")
+    (repo / "b.txt").write_text("key sk-" "ant-abc123\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True, env=env)
     script = str(ROOT / "scripts" / "check-public.sh")
     r = subprocess.run(["sh", script], cwd=repo, capture_output=True, text=True,

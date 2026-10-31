@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import tomllib
 from contextlib import asynccontextmanager
 
@@ -98,6 +99,7 @@ def fakes(tmp_path, *, login="ok", peak=0.3, vv=None):
 @pytest.fixture(autouse=True)
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on Windows
     return tmp_path
 
 
@@ -172,7 +174,7 @@ async def test_setup_first_run_saves_each_step(tmp_path, home):
     assert tomllib.loads((tmp_path / "config.toml").read_text())["knowledge_dir"] == "~/notes"
     assert vv.synthesized == [3] and len(played) == 1
     assert services.started == 1
-    assert "ヘッドホン" in con.text and "Listening" in con.text
+    assert "ヘッドホン" in con.text and "聞き取り中" in con.text
 
 
 async def test_setup_rerun_uses_current_values(tmp_path, home):
@@ -216,7 +218,7 @@ async def test_setup_explains_mic_permission_on_silence(tmp_path):
     con = FakeConsole("", "", "", "")  # Enter after "許可", then voice / knowledge / model
     assert await setup_wizard.run_setup(con, **kw) == 0
     assert "許可を押したら Enter" in con.prompts[0]
-    assert setup_wizard.TERMINAL_MIC_NOTE in con.text and "音が取れませんでした" in con.text
+    assert setup_wizard.t("terminal_mic_note", "ja") in con.text and "音が取れませんでした" in con.text
     assert services.started == 1  # carries on
 
 
@@ -224,7 +226,7 @@ async def test_setup_probes_the_mic_again_after_the_permission_dialog(tmp_path):
     kw, _, _ = fakes(tmp_path, peak=[0.0, 0.2])
     con = FakeConsole("", "", "", "")
     assert await setup_wizard.run_setup(con, **kw) == 0
-    assert "音が取れました" in con.text and setup_wizard.TERMINAL_MIC_NOTE not in con.text
+    assert "音が取れました" in con.text and setup_wizard.t("terminal_mic_note", "ja") not in con.text
 
 
 async def test_setup_linux_does_not_ask_again_on_silence(tmp_path):
@@ -239,7 +241,7 @@ async def test_setup_says_usage_limit_is_not_a_login_problem(tmp_path):
     kw, services, _ = fakes(tmp_path, login="limit")
     con = FakeConsole("", "", "")
     assert await setup_wizard.run_setup(con, **kw) == 0
-    assert setup_wizard.LIMIT_NOTE in con.text and setup_wizard.LOGIN_HELP not in con.text
+    assert setup_wizard.t("limit_note", "ja") in con.text and setup_wizard.t("login_help", "ja") not in con.text
     assert services.started == 1
 
 
@@ -248,9 +250,9 @@ async def test_setup_checks_the_daemon_mic_and_explains_python_permission(tmp_pa
     services.debug = {"paused": False, "frames_last_5s": 156, "max_abs_last_5s": 0.0}
     con = FakeConsole("", "", "", "")  # voice, knowledge, model, Enter to check again
     assert await setup_wizard.run_setup(con, **kw) == 0
-    assert con.text.count(setup_wizard.DAEMON_MIC_NOTE) == 2  # checked twice, still silent
-    assert "python3.12" in setup_wizard.DAEMON_MIC_NOTE and "tccutil reset Microphone" in setup_wizard.DAEMON_MIC_NOTE
-    assert "launchctl kickstart -k gui/$UID/dev.zundamon-jarvis.daemon" in setup_wizard.DAEMON_MIC_NOTE
+    assert con.text.count(setup_wizard.t("daemon_mic_note", "ja")) == 2  # checked twice, still silent
+    assert "python3.12" in setup_wizard.t("daemon_mic_note", "ja") and "tccutil reset Microphone" in setup_wizard.t("daemon_mic_note", "ja")
+    assert "launchctl kickstart -k gui/$UID/dev.zundamon-jarvis.daemon" in setup_wizard.t("daemon_mic_note", "ja")
     assert services.requests.count("debug") == 2 * setup_wizard.DAEMON_MIC_CHECK_S
 
 
@@ -259,7 +261,7 @@ async def test_setup_daemon_mic_ok(tmp_path):
     con = FakeConsole("", "", "")
     assert await setup_wizard.run_setup(con, **kw) == 0
     assert "常駐しているほうにも音が届いています" in con.text
-    assert setup_wizard.DAEMON_MIC_NOTE not in con.text
+    assert setup_wizard.t("daemon_mic_note", "ja") not in con.text
 
 
 async def test_setup_reports_a_broken_config_without_a_traceback(tmp_path):
@@ -289,9 +291,10 @@ async def test_setup_reports_a_missing_executable(tmp_path):
     ("~/notes", "~/notes"),
 ])
 def test_clean_path_input(typed, want):
-    assert setup_wizard.clean_path_input(typed) == want
+    assert setup_wizard.clean_path_input(typed, "mac") == want
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="backslash-escaped drops are a macOS/Linux terminal habit")
 async def test_setup_knowledge_dir_accepts_a_dragged_folder(tmp_path, home):
     real = home / "My Notes"
     real.mkdir()
@@ -356,3 +359,123 @@ def test_uninstall_skips_questions_for_missing_things(tmp_path):
     assert setup_wizard.run_uninstall(con, system="linux", uninstall=lambda s: None,
                                       engine_dir=tmp_path / "none", config_path=tmp_path / "c.toml") == 0
     assert con.prompts == []
+
+
+@pytest.mark.parametrize("system, needle", [
+    ("mac", "Mac のスピーカー"),
+    ("windows", "Windows にはエコーキャンセルがない"),
+    ("linux", "zundamon_jarvis_aec_source"),
+])
+def test_headphones_note_is_per_os(system, needle):
+    assert needle in setup_wizard.headphones_note(system)
+
+
+def test_mic_problem_note_per_os():
+    assert setup_wizard.mic_problem_note("mac", "open") == setup_wizard.t("terminal_mic_note", "ja")
+    assert "デスクトップ アプリ" in setup_wizard.mic_problem_note("windows", "silent")
+    assert "ミュート" in setup_wizard.mic_problem_note("linux", "silent")
+    assert "つながっているか" in setup_wizard.mic_problem_note("linux", "open")
+
+
+async def test_setup_windows_checks_the_daemon_mic_with_windows_advice(tmp_path):
+    kw, services, _ = fakes(tmp_path)
+    kw["system"] = "windows"
+    services.debug = {"paused": False, "frames_last_5s": 156, "max_abs_last_5s": 0.0}
+    con = FakeConsole("", "", "", "")
+    assert await setup_wizard.run_setup(con, **kw) == 0
+    assert con.text.count(setup_wizard.t("windows_daemon_mic_note", "ja")) == 2
+    assert "doctor | clip" in setup_wizard.t("windows_daemon_mic_note", "ja")
+    assert "python3.12" not in con.text and "pbcopy" not in con.text
+
+
+async def test_setup_linux_skips_the_daemon_mic_check(tmp_path):
+    kw, services, _ = fakes(tmp_path)
+    kw["system"] = "linux"
+    con = FakeConsole("", "", "")
+    assert await setup_wizard.run_setup(con, **kw) == 0
+    assert "debug" not in services.requests
+
+
+def test_engine_command_uses_the_gpu_on_windows(tmp_path):
+    run = tmp_path / "run.exe"
+    assert setup_wizard.engine_command(run, "windows")[-1] == "--use_gpu"
+    assert "--use_gpu" not in setup_wizard.engine_command(tmp_path / "run", "linux")
+    assert "creationflags" in setup_wizard._detached("windows")
+    assert setup_wizard._detached("mac") == {"start_new_session": True}
+
+
+def test_install_and_start_on_windows_only_installs(monkeypatch):
+    calls = []
+    monkeypatch.setattr("zundamon_jarvis.service.install_services", calls.append)
+    monkeypatch.setattr(setup_wizard.subprocess, "run", lambda *a, **k: calls.append(("run", a)))
+    setup_wizard.install_and_start("windows")
+    assert calls == ["windows"]
+
+
+def test_resolve_folder(tmp_path, home):
+    (home / "notes").mkdir()
+    assert setup_wizard.resolve_folder("~/notes") == home / "notes"
+    assert setup_wizard.resolve_folder("notes", cwd=home) == home / "notes"
+    assert setup_wizard.resolve_folder("'~/notes' ") == home / "notes"
+    assert setup_wizard.resolve_folder("~/missing") is None
+    assert setup_wizard.resolve_folder("  ") is None
+
+
+def test_save_model_rejects_unknown(tmp_path):
+    from zundamon_jarvis.config import Config
+
+    with pytest.raises(ValueError):
+        setup_wizard.save_model("gpt", Config(), tmp_path / "c.toml")
+    assert not (tmp_path / "c.toml").exists()
+
+
+def test_clean_path_input_keeps_windows_backslashes():
+    assert setup_wizard.clean_path_input(r"C:\Users\taro\My Notes", "windows") == r"C:\Users\taro\My Notes"
+    assert setup_wizard.clean_path_input(r'"C:\Users\taro\notes"', "windows") == r"C:\Users\taro\notes"
+
+
+# ---- English ----
+
+_JAPANESE = __import__("re").compile(r"[぀-ヿ一-鿿]")
+
+
+async def test_setup_in_english_says_everything_in_english(tmp_path, home):
+    notes = home / "notes"
+    notes.mkdir()
+    kw, services, _ = fakes(tmp_path)
+    con = FakeConsole("1", "y", "~/notes", "opus")
+    assert await setup_wizard.run_setup(con, lang="en", **kw) == 0
+    assert "[1/7] Checking your Claude login" in con.text
+    assert "Headphones" in con.text and "Started (now: Listening)." in con.text
+    assert "Use ずんだもん ノーマル? [Y/n]: " in con.prompts
+    assert "Knowledge folder: ~/notes" in con.lines and "Model: opus" in con.lines
+    # only the voices' own names stay Japanese
+    leftover = [x for x in con.prompts + con.lines if _JAPANESE.search(x.replace("ずんだもん", "")
+                .replace("四国めたん", "").replace("青山龍星", "").replace("春日部つむぎ", "").replace("ノーマル", ""))]
+    assert leftover == []
+
+
+async def test_setup_follows_the_configured_language(tmp_path):
+    (tmp_path / "config.toml").write_text('language = "en"\n', encoding="utf-8")
+    kw, _, _ = fakes(tmp_path, login="login")
+    con = FakeConsole()
+    assert await setup_wizard.run_setup(con, **kw) == 2
+    assert con.lines[-1] == setup_wizard.t("login_help", "en")
+
+
+def test_uninstall_in_english(tmp_path):
+    engine = tmp_path / "voicevox_engine"
+    engine.mkdir()
+    con = FakeConsole("y")
+    assert setup_wizard.run_uninstall(con, system="mac", uninstall=lambda s: None, engine_dir=engine,
+                                      config_path=tmp_path / "none.toml", lang="en") == 0
+    assert con.prompts[0].startswith("Delete the VOICEVOX engine")
+    assert "Engine deleted." in con.lines and not any(_JAPANESE.search(x) for x in con.text.split("\n"))
+
+
+@pytest.mark.parametrize("sys_", ["mac", "windows", "linux"])
+def test_notes_in_english(sys_):
+    assert setup_wizard.headphones_note(sys_, "en").startswith("Headphones")
+    for what in ("ask", "ok", "unknown", "silent"):
+        assert not _JAPANESE.search(setup_wizard.daemon_mic_text(sys_, what, "en"))
+    assert not _JAPANESE.search(setup_wizard.mic_problem_note(sys_, "open", "en"))

@@ -1,13 +1,23 @@
 import os
+import sys
 from pathlib import Path
 
 import pytest
+
+# macOS's runtime dir is named after the uid and checked for owner and mode; Linux's falls back
+# to /run/user/<uid>. Windows has no uid (``os.getuid``) or mode bits.
+needs_uid = pytest.mark.skipif(sys.platform == "win32", reason="needs os.getuid and POSIX modes")
+
+
+def set_home(monkeypatch, path):
+    monkeypatch.setenv("HOME", str(path))
+    monkeypatch.setenv("USERPROFILE", str(path))  # Path.home() on Windows
 
 from zundamon_jarvis.platform import config_dir, data_dir, log_dir, runtime_dir, socket_path, system
 
 
 def test_linux_paths_unchanged(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(monkeypatch, tmp_path)
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     assert config_dir("linux") == tmp_path / ".config/zundamon-jarvis"
@@ -21,6 +31,7 @@ def test_linux_honours_xdg_state_home(monkeypatch, tmp_path):
     assert log_dir("linux") == tmp_path / "zundamon-jarvis"
 
 
+@needs_uid
 def test_linux_runtime_dir_falls_back_to_run_user(monkeypatch):
     import os
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
@@ -28,12 +39,17 @@ def test_linux_runtime_dir_falls_back_to_run_user(monkeypatch):
 
 
 def test_mac_paths(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(monkeypatch, tmp_path)
     monkeypatch.setenv("TMPDIR", str(tmp_path / "t"))
     sup = tmp_path / "Library/Application Support/zundamon-jarvis"
     assert config_dir("mac") == sup
     assert data_dir("mac") == sup
     assert log_dir("mac") == tmp_path / "Library/Logs/zundamon-jarvis"
+
+
+@needs_uid
+def test_mac_socket_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "t"))
     sock = socket_path("mac")
     assert sock.parent.stat().st_mode & 0o777 == 0o700
     assert sock.name == "zundamon-jarvis.sock"
@@ -47,6 +63,7 @@ def test_system_from_sys_platform(monkeypatch):
     assert system() == "linux"
 
 
+@needs_uid
 def test_mac_without_tmpdir_uses_tmp_with_uid(monkeypatch, tmp_path):
     monkeypatch.delenv("TMPDIR", raising=False)
     d = Path("/tmp") / f"zundamon-jarvis-{os.getuid()}"
@@ -56,6 +73,7 @@ def test_mac_without_tmpdir_uses_tmp_with_uid(monkeypatch, tmp_path):
     assert d.stat().st_mode & 0o777 == 0o700
 
 
+@needs_uid
 def test_mac_runtime_dir_tightens_wrong_permissions(monkeypatch, tmp_path):
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     d = tmp_path / f"zundamon-jarvis-{os.getuid()}"
@@ -65,6 +83,7 @@ def test_mac_runtime_dir_tightens_wrong_permissions(monkeypatch, tmp_path):
     assert d.stat().st_mode & 0o777 == 0o700
 
 
+@needs_uid
 def test_mac_runtime_dir_rejects_symlink(monkeypatch, tmp_path):
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     target = tmp_path / "elsewhere"
@@ -74,6 +93,7 @@ def test_mac_runtime_dir_rejects_symlink(monkeypatch, tmp_path):
         runtime_dir("mac")
 
 
+@needs_uid
 def test_mac_runtime_dir_rejects_foreign_owner(monkeypatch, tmp_path):
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     uid = os.getuid()
@@ -83,3 +103,18 @@ def test_mac_runtime_dir_rejects_foreign_owner(monkeypatch, tmp_path):
     (tmp_path / f"zundamon-jarvis-{uid + 1}").mkdir(mode=0o700)
     with pytest.raises(RuntimeError, match="owned by uid"):
         runtime_dir("mac")
+
+
+def test_windows_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    assert config_dir("windows") == tmp_path / "Roaming" / "zundamon-jarvis"
+    assert data_dir("windows") == tmp_path / "Local" / "zundamon-jarvis"
+    assert log_dir("windows") == tmp_path / "Local" / "zundamon-jarvis" / "logs"
+    assert socket_path("windows") == tmp_path / "Local" / "zundamon-jarvis" / "run" / "control.json"
+    assert (tmp_path / "Local" / "zundamon-jarvis" / "run").is_dir()
+
+
+def test_system_windows(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    assert system() == "windows"

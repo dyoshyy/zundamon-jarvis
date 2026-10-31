@@ -12,6 +12,12 @@ class ``zundamon-jarvis-settings``). Rows, ↑↓ to move, ←→ to change, Ent
 - Mic: the OS default input or one of the input devices (``pactl``). Saved to config.toml; the
   open stream keeps its device, so it applies when ZundamonJarvis restarts.
 - Pause / Resume: the same toggle as SUPER+ALT+J.
+- Language: 日本語 / English, the display language of this window, the menus and the setup
+  (``zundamon_jarvis.i18n``; saved to config.toml). This window redraws in it at once; the
+  menu bar / tray and the conversation window follow the next time they draw.
+
+Every label is in the display language, read from config.toml on each load (and poll), so a
+change made elsewhere (the setup page) shows within one poll. The voice samples follow it too.
 
 With the daemon running, every change goes through the control socket (the daemon applies it
 and writes config.toml). Without it the window writes config.toml itself (``update_config``:
@@ -19,7 +25,8 @@ only that key) and says the change applies on the next start; samples need the d
 
 All the blocking work (socket, VOICEVOX) runs on one worker thread, in order. The pure helpers
 (``step_speed``, ``voice_groups``, ``voice_label``, ``cycle_model``, ``model_note``, ``mic_note``,
-``View``; the device list logic is in ``zundamon_jarvis.mics``)
+``View``; the device list logic is in ``zundamon_jarvis.mics``; they take ``lang``, default the
+display language)
 hold the logic and are tested without a terminal.
 """
 
@@ -42,8 +49,10 @@ from textual.timer import Timer
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from zundamon_jarvis import i18n
 from zundamon_jarvis.config import (
     CONFIG_PATH,
+    LANGUAGES,
     DEFAULT_MODEL,
     DEFAULT_SPEED,
     MODELS,
@@ -55,6 +64,7 @@ from zundamon_jarvis.config import (
     valid_mic_device,
 )
 from zundamon_jarvis.control import request as control_request
+from zundamon_jarvis.control import status_label
 from zundamon_jarvis.mics import (
     MicSource,
     cycle_mic,
@@ -64,20 +74,79 @@ from zundamon_jarvis.mics import (
     mic_value,
     parse_mic,
 )
-from zundamon_jarvis.live_settings import parse_model, parse_speaker, parse_speed
+from zundamon_jarvis.live_settings import parse_language, parse_model, parse_speaker, parse_speed
 from zundamon_jarvis.tts import DEFAULT_SPEAKER, DEFAULT_URL, talk_styles
 
 SPEED_STEP = 0.1
-SPEED_SAMPLE = "This is how fast I will talk."
-VOICE_SAMPLE = "This is the voice I will use."
 PREVIEW_DELAY_S = 0.45
 POLL_S = 2.0
 MODEL_LABEL = {"sonnet": "Sonnet", "opus": "Opus", "haiku": "Haiku"}
-STATE_LABEL = {"listening": "Listening", "paused": "Paused", "thinking": "Thinking",
-               "speaking": "Speaking", "limit": "Limit", "offline": "Offline"}
-OFFLINE_NOTE = "applies on next start"
-STOPPED = "ZundamonJarvis is stopped — " + OFFLINE_NOTE
+LANGUAGE_LABEL = {"ja": "日本語", "en": "English"}  # each in its own language
 LABEL_CELLS = 17
+
+TEXT = {
+    "title": {"ja": "ZundamonJarvis 設定", "en": "ZundamonJarvis Settings"},
+    "keys": {"ja": "↑↓ 選択  ←→ 変更  Enter 決定  Esc 閉じる", "en": "↑↓ Select  ←→ Change  Enter Confirm  Esc Close"},
+    "voice.title": {"ja": "声を選ぶ", "en": "Choose a voice"},
+    "voice.keys": {"ja": "↑↓ 試聴  Enter 決定  Esc 戻る", "en": "↑↓ Preview  Enter Select  Esc Back"},
+    "row.speed": {"ja": "話す速さ", "en": "Voice speed"},
+    "row.voice": {"ja": "声", "en": "Voice"},
+    "row.model": {"ja": "モデル", "en": "Model"},
+    "row.mic": {"ja": "マイク", "en": "Mic"},
+    "row.switch": {"ja": "今すぐ切り替え", "en": "Switch now"},
+    "row.pause": {"ja": "一時停止 / 再開", "en": "Pause / Resume"},
+    "row.language": {"ja": "表示言語", "en": "Language"},
+    "switch.value": {"ja": "会話をリセット", "en": "Reset conversation"},
+    "pause.paused": {"ja": "⏸ 一時停止中 — Enter で再開", "en": "⏸ Paused — Enter to resume"},
+    "pause.listening": {"ja": "▶ 聞き取り中", "en": "▶ Listening"},
+    "status.stopped": {"ja": "○ 停止中 — {note}", "en": "○ Stopped — {note}"},
+    "offline_note": {"ja": "次の起動から反映", "en": "applies on next start"},
+    "stopped": {"ja": "ZundamonJarvis は停止中です — 次の起動から反映", "en": "ZundamonJarvis is stopped — applies on next start"},
+    "voice.default": {"ja": "{speaker} / ノーマル（既定）", "en": "{speaker} / ノーマル (default)"},
+    "model.cli_default": {"ja": "CLI の既定", "en": "CLI default"},
+    "model.next": {"ja": "次の会話から反映", "en": "applies from the next conversation"},
+    "model.stays": {"ja": "この会話は {model} のまま — 「今すぐ切り替え」で反映",
+                    "en": "This conversation stays on {model} — use \"Switch now\" to apply"},
+    "mic.restart": {"ja": "反映するには ZundamonJarvis を再起動してください", "en": "Restart ZundamonJarvis to apply"},
+    "mic.switch": {"ja": "←→ で切り替え（ZundamonJarvis の再起動で反映）",
+                   "en": "←→ to switch (applies when ZundamonJarvis restarts)"},
+    "mic.bluetooth": {
+        "ja": "Bluetooth ヘッドセットのマイクを使うと、ヘッドセットが通話用の音質に切り替わります（マイクを使っている間は音楽の音が悪くなります）",
+        "en": "Bluetooth headset mics switch the headset to call quality (music sounds worse while the mic is in use)",
+    },
+    "hint.speed": {"ja": "←→ で調整（{min}–{max}）。変えるたびに試聴します",
+                   "en": "←→ to adjust ({min}–{max}). Plays a sample on every change"},
+    "hint.voice": {"ja": "Enter で一覧（選ぶと試聴します）", "en": "Enter for the list (plays a sample as you move)"},
+    "hint.model": {"ja": "←→ で切り替え", "en": "←→ to switch"},
+    "hint.switch": {"ja": "会話をリセットし、次の発話から新しいモデルを使います",
+                    "en": "Reset the conversation; the next utterance uses the new model"},
+    "hint.pause": {"ja": "Enter で切り替え（SUPER+ALT+J でも）", "en": "Enter to toggle (SUPER+ALT+J works too)"},
+    "hint.language": {"ja": "←→ で切り替え（メニューや会話ウィンドウにも反映されます）",
+                      "en": "←→ to switch (the menus and the conversation window follow)"},
+    "busy.user_speaking": {"ja": "話している最中なので試聴できません", "en": "You are speaking, so no preview"},
+    "busy.speaking": {"ja": "ZundamonJarvis が話しているので試聴できません", "en": "ZundamonJarvis is speaking, so no preview"},
+    "cannot_change": {"ja": "変更できません: {error}", "en": "Cannot change: {error}"},
+    "not_saved": {"ja": "反映しましたが、config.toml に保存できませんでした", "en": "Applied, but could not save to config.toml"},
+    "no_preview": {"ja": "ZundamonJarvis が起動していないので試聴できません", "en": "ZundamonJarvis is not running, so no preview"},
+    "cannot_preview": {"ja": "試聴できません: {error}", "en": "Cannot preview: {error}"},
+    "not_running": {"ja": "ZundamonJarvis が起動していません", "en": "ZundamonJarvis is not running"},
+    "not_running_note": {"ja": "ZundamonJarvis が起動していません（{note}）", "en": "ZundamonJarvis is not running ({note})"},
+    "session.closed": {"ja": "会話をリセットしました。次の発話から {model} を使います",
+                       "en": "Conversation reset. From the next utterance: {model}"},
+    "session.none": {"ja": "まだ会話はありません。次の発話から {model} を使います",
+                     "en": "No conversation yet. From the next utterance: {model}"},
+    "session.busy": {"ja": "応答中のため今は切り替えられません（次の会話から反映）",
+                     "en": "Busy right now, cannot switch (applies from the next conversation)"},
+    "no_voicevox": {"ja": "VOICEVOX に接続できないため、声の一覧を出せません",
+                    "en": "Cannot reach VOICEVOX, so the voice list is unavailable"},
+    # spoken by the voice being tried, in the window's language
+    "sample.speed": {"ja": "このくらいの速さで話すのだ。", "en": "This is how fast I will talk."},
+    "sample.voice": {"ja": "この声で話すのだ。", "en": "This is the voice I will use."},
+}
+
+
+def _t(key: str, lang: str | None = None, **fields: object) -> str:
+    return i18n.text(TEXT, key, lang, **fields)
 
 
 # ---- pure logic ----
@@ -108,9 +177,9 @@ def voice_groups(speakers: Any) -> list[VoiceGroup]:
     return list(groups.values())
 
 
-def voice_label(groups: list[VoiceGroup], speaker_id: int | None) -> str:
+def voice_label(groups: list[VoiceGroup], speaker_id: int | None, lang: str | None = None) -> str:
     if speaker_id is None:
-        return f"{DEFAULT_SPEAKER} / ノーマル (default)"
+        return _t("voice.default", lang, speaker=DEFAULT_SPEAKER)
     for g in groups:
         for v in g.voices:
             if v.id == speaker_id:
@@ -124,8 +193,14 @@ def cycle_model(model: str | None, delta: int) -> str:
     return MODELS[(MODELS.index(model) + delta) % len(MODELS)]
 
 
-def model_label(model: str | None) -> str:
-    return MODEL_LABEL.get(model or "", model or "CLI default")
+def model_label(model: str | None, lang: str | None = None) -> str:
+    return MODEL_LABEL.get(model or "", model or _t("model.cli_default", lang))
+
+
+def other_language(lang: str, delta: int) -> str:
+    """The language ←→ moves to (two of them: either way is the other one)."""
+    i = LANGUAGES.index(lang) if lang in LANGUAGES else 0
+    return LANGUAGES[(i + delta) % len(LANGUAGES)]
 
 
 @dataclass
@@ -139,6 +214,8 @@ class View:
     session_model: str | None = None
     mic_device: str | int | None = None
     mic_active: str | int | None = None
+    reasons: tuple[str, ...] = ()  # why it is offline (the status's "reasons")
+    lang: str | None = None  # the display language when loaded; None: i18n.language()
 
     @property
     def paused(self) -> bool:
@@ -154,8 +231,10 @@ class View:
         def text(value: Any) -> str | None:
             return value if isinstance(value, str) else None
 
+        reasons = resp.get("reasons")
         return cls(online=True, state=str(resp.get("state", "")),
                    state_text=str(resp.get("text", "")),
+                   reasons=tuple(r for r in reasons if isinstance(r, str)) if isinstance(reasons, list) else (),
                    speed=float(speed) if isinstance(speed, (int, float)) else DEFAULT_SPEED,
                    speaker_id=sid if isinstance(sid, int) and not isinstance(sid, bool) else None,
                    model=text(s.get("model")), session_model=text(s.get("session_model")),
@@ -167,38 +246,41 @@ class View:
                    mic_device=cfg.mic_device, mic_active=cfg.mic_device)
 
 
-def model_note(view: View) -> str:
+def model_note(view: View, lang: str | None = None) -> str:
     if not view.online:
-        return OFFLINE_NOTE
+        return _t("offline_note", lang)
     if view.session_model is None:
-        return "applies from the next conversation"
+        return _t("model.next", lang)
     if view.session_model != view.model:
-        return f"This conversation stays on {model_label(view.session_model)} — use \"Switch now\" to apply"
+        return _t("model.stays", lang, model=model_label(view.session_model, lang))
     return ""
 
 
-BLUETOOTH_MIC_WARNING = ("Bluetooth headset mics switch the headset to call quality "
-                         "(music sounds worse while the mic is in use)")
-
-
-def mic_note(view: View, default_name: str | None = None) -> str:
+def mic_note(view: View, default_name: str | None = None, lang: str | None = None) -> str:
     """Hint under the Mic row. ``default_name`` is the OS default source (for "System default")."""
     if not view.online:
-        note = OFFLINE_NOTE
+        note = _t("offline_note", lang)
     elif view.mic_device != view.mic_active:
-        note = "Restart ZundamonJarvis to apply"
+        note = _t("mic.restart", lang)
     else:
-        note = "←→ to switch (applies when ZundamonJarvis restarts)"
+        note = _t("mic.switch", lang)
     chosen = default_name if view.mic_device is None else view.mic_device
     if isinstance(chosen, str) and chosen.startswith("bluez_input."):
-        note += f"\n⚠ {BLUETOOTH_MIC_WARNING}"
+        note += f"\n⚠ {_t('mic.bluetooth', lang)}"
     return note
+
+
+def mic_text(sources: list[MicSource], device: str | int | None, default_name: str | None,
+             lang: str | None = None) -> str:
+    """``mics.mic_label`` in the display language."""
+    return mic_label(sources, device, default_name, lang)
 
 
 # ---- talking to the daemon (or config.toml when it is not running) ----
 
 class Client(Protocol):
     def load(self) -> View: ...
+    def language(self) -> str: ...
     def speakers(self) -> list[dict]: ...
     def mics(self) -> list[MicSource]: ...
     def default_mic(self) -> str | None: ...
@@ -208,11 +290,11 @@ class Client(Protocol):
     def new_session(self) -> tuple[View, str | None]: ...
 
 
-_BUSY = {"user_speaking": "You are speaking, so no preview",
-         "speaking": "ZundamonJarvis is speaking, so no preview"}
-_CONFIG_KEY = {"speed": "speed", "speaker": "speaker_id", "model": "model", "mic": "mic_device"}
+_CONFIG_KEY = {"speed": "speed", "speaker": "speaker_id", "model": "model", "mic": "mic_device",
+               "language": "language"}
 _PARSE: dict[str, Callable[[str], Any]] = {"speed": parse_speed, "speaker": parse_speaker,
-                                           "model": parse_model, "mic": parse_mic}
+                                           "model": parse_model, "mic": parse_mic,
+                                           "language": parse_language}
 
 
 class SettingsClient:
@@ -234,17 +316,28 @@ class SettingsClient:
             return None
         return resp if isinstance(resp, dict) else None
 
+    def language(self) -> str:
+        """The display language now (config.toml's, else the OS's)."""
+        return i18n.language(self._path)
+
     def _offline(self) -> View:
         try:
-            return View.from_config(load_config(self._path))
+            view = View.from_config(load_config(self._path))
         except (OSError, ValueError):
-            return View(online=False)
+            view = View(online=False)
+        view.lang = self.language()
+        return view
+
+    def _online(self, resp: dict) -> View:
+        view = View.from_reply(resp)
+        view.lang = self.language()
+        return view
 
     def load(self) -> View:
         resp = self._ask("get")
         if resp is None or "error" in resp:
             return self._offline()
-        return View.from_reply(resp)
+        return self._online(resp)
 
     def speakers(self) -> list[dict]:
         try:
@@ -265,45 +358,51 @@ class SettingsClient:
         resp = self._ask(f"set {key} {value}", timeout=6.0)
         if resp is not None:
             if "error" in resp:
-                return self.load(), f"Cannot change: {resp['error']}"
-            msg = None if resp.get("saved", True) else "Applied, but could not save to config.toml"
-            return View.from_reply(resp), msg
+                view = self.load()
+                return view, _t("cannot_change", view.lang, error=resp["error"])
+            view = self._online(resp)
+            return view, None if resp.get("saved", True) else _t("not_saved", view.lang)
         try:
             parsed = _PARSE[key](str(value))
             update_config({_CONFIG_KEY[key]: parsed}, self._path)
         except (KeyError, ValueError, OSError) as e:
-            return self._offline(), f"Cannot change: {e}"
-        return self._offline(), STOPPED
+            view = self._offline()
+            return view, _t("cannot_change", view.lang, error=e)
+        view = self._offline()
+        # the language shows at once (this window, the menus); the rest waits for the daemon
+        return view, None if key == "language" else _t("stopped", view.lang)
 
     def preview(self, speaker_id: int, speed: float, text: str) -> str | None:
         resp = self._ask(f"preview {speaker_id} {speed} {text}", timeout=12.0)
+        lang = self.language()
         if resp is None:
-            return "ZundamonJarvis is not running, so no preview"
+            return _t("no_preview", lang)
         if "error" in resp:
-            return f"Cannot preview: {resp['error']}"
+            return _t("cannot_preview", lang, error=resp["error"])
         if resp.get("ok"):
             return None
-        return _BUSY.get(resp.get("busy", ""))
+        busy = resp.get("busy", "")
+        return _t(f"busy.{busy}", lang) if f"busy.{busy}" in TEXT else None
 
     def toggle(self) -> tuple[View, str | None]:
         resp = self._ask("toggle")
         if resp is None:
-            return self._offline(), "ZundamonJarvis is not running"
+            view = self._offline()
+            return view, _t("not_running", view.lang)
         return self.load(), None
 
     def new_session(self) -> tuple[View, str | None]:
         resp = self._ask("newsession")
         if resp is None:
-            return self._offline(), f"ZundamonJarvis is not running ({OFFLINE_NOTE})"
+            view = self._offline()
+            return view, _t("not_running_note", view.lang, note=_t("offline_note", view.lang))
         if "error" in resp:
             return self.load(), resp["error"]
-        view = View.from_reply(resp)
-        model = model_label(view.model)
-        return view, {
-            "closed": f"Conversation reset. From the next utterance: {model}",
-            "none": f"No conversation yet. From the next utterance: {model}",
-            "busy": "Busy right now, cannot switch (applies from the next conversation)",
-        }.get(resp.get("session", ""), None)
+        view = self._online(resp)
+        session = resp.get("session", "")
+        if f"session.{session}" not in TEXT:
+            return view, None
+        return view, _t(f"session.{session}", view.lang, model=model_label(view.model, view.lang))
 
 
 # ---- the window ----
@@ -313,13 +412,7 @@ def _row(label: str, value: str) -> Text:
     return Text(f"{label}{pad}{value}")
 
 
-ROWS = ("speed", "voice", "model", "mic", "switch", "pause")
-HINT = {
-    "speed": f"←→ to adjust ({SPEED_MIN:.1f}–{SPEED_MAX:.1f}). Plays a sample on every change",
-    "voice": "Enter for the list (plays a sample as you move)",
-    "switch": "Reset the conversation; the next utterance uses the new model",
-    "pause": "Enter to toggle (SUPER+ALT+J works too)",
-}
+ROWS = ("speed", "voice", "model", "mic", "switch", "pause", "language")
 
 CSS = """
 Screen { padding: 0 1; }
@@ -341,8 +434,9 @@ class VoiceScreen(Screen):
     BINDINGS = [Binding("escape", "back", "Back"), Binding("q", "back", "Back", show=False)]
 
     def __init__(self, groups: list[VoiceGroup], current: int | None,
-                 on_preview: Callable[[int], None]) -> None:
+                 on_preview: Callable[[int], None], lang: str | None = None) -> None:
         super().__init__()
+        self._lang = lang
         self._groups = groups
         self._current = current
         self._last = current  # the voice highlighted without being previewed (at open)
@@ -350,8 +444,8 @@ class VoiceScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top"):
-            yield Static("Choose a voice", id="title")
-            yield Static(voice_label(self._groups, self._current), id="status")
+            yield Static(_t("voice.title", self._lang), id="title")
+            yield Static(voice_label(self._groups, self._current, self._lang), id="status")
         options: list[Option] = []
         for g in self._groups:
             options.append(Option(Text(g.name, style="bold"), disabled=True))
@@ -359,7 +453,7 @@ class VoiceScreen(Screen):
                 options.append(Option(Text(f"   {v.style}"), id=f"v{v.id}"))
         yield OptionList(*options, id="voices")
         yield Static("", id="msg")
-        yield Static("↑↓ Preview  Enter Select  Esc Back", id="keys")
+        yield Static(_t("voice.keys", self._lang), id="keys")
 
     def on_mount(self) -> None:
         voices = self.query_one("#voices", OptionList)
@@ -420,12 +514,12 @@ class SettingsApp(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top"):
-            yield Static("ZundamonJarvis Settings", id="title")
+            yield Static(_t("title", self.view.lang), id="title")
             yield Static("", id="status")
         yield OptionList(*(Option(Text(""), id=r) for r in ROWS), id="rows")
         yield Static("", id="hint")
         yield Static("", id="msg")
-        yield Static("↑↓ Select  ←→ Change  Enter Confirm  Esc Close", id="keys")
+        yield Static(_t("keys", self.view.lang), id="keys")
 
     @property
     def _main(self) -> Screen:
@@ -466,36 +560,48 @@ class SettingsApp(App):
             self.view = view
             self._render_all()
 
+    @property
+    def lang(self) -> str:
+        return self.view.lang or i18n.language()
+
     def _render_all(self) -> None:
-        v = self.view
+        v, lang = self.view, self.lang
         if v.online:
-            status = f"● {STATE_LABEL.get(v.state, v.state_text or v.state)}"
+            status = f"● {status_label({'state': v.state, 'text': v.state_text, 'reasons': list(v.reasons)}, lang)}"
         else:
-            status = f"○ Stopped — {OFFLINE_NOTE}"
-        self._main.query_one("#status", Static).update(status)
-        rows = self._main.query_one("#rows", OptionList)
+            status = _t("status.stopped", lang, note=_t("offline_note", lang))
+        main = self._main
+        main.query_one("#title", Static).update(_t("title", lang))
+        main.query_one("#keys", Static).update(_t("keys", lang))
+        main.query_one("#status", Static).update(status)
+        rows = main.query_one("#rows", OptionList)
         values = {
-            "speed": _row("Voice speed", f"◂ {v.speed:.1f} ▸"),
-            "voice": _row("Voice", f"{voice_label(self._groups, v.speaker_id)}  ›"),
-            "model": _row("Model", f"◂ {model_label(v.model)} ▸"),
-            "mic": _row("Mic", f"◂ {mic_label(self._mics, v.mic_device, self._default_mic)} ▸"),
-            "switch": _row("Switch now", "Reset conversation"),
-            "pause": _row("Pause / Resume",
-                          "⏸ Paused — Enter to resume" if v.paused else "▶ Listening"
+            "speed": _row(_t("row.speed", lang), f"◂ {v.speed:.1f} ▸"),
+            "voice": _row(_t("row.voice", lang), f"{voice_label(self._groups, v.speaker_id, lang)}  ›"),
+            "model": _row(_t("row.model", lang), f"◂ {model_label(v.model, lang)} ▸"),
+            "mic": _row(_t("row.mic", lang), f"◂ {mic_text(self._mics, v.mic_device, self._default_mic, lang)} ▸"),
+            "switch": _row(_t("row.switch", lang), _t("switch.value", lang)),
+            "pause": _row(_t("row.pause", lang),
+                          _t("pause.paused", lang) if v.paused else _t("pause.listening", lang)
                           if v.online else "—"),
+            "language": _row(_t("row.language", lang), f"◂ {LANGUAGE_LABEL.get(lang, lang)} ▸"),
         }
         for rid, prompt in values.items():
             rows.replace_option_prompt(rid, prompt)
         self._render_hint()
 
     def _render_hint(self) -> None:
-        row = self._row()
+        row, lang = self._row(), self.lang
         if row == "model":
-            hint = model_note(self.view) or "←→ to switch"
+            hint = model_note(self.view, lang) or _t("hint.model", lang)
         elif row == "mic":
-            hint = mic_note(self.view, self._default_mic)
+            hint = mic_note(self.view, self._default_mic, lang)
+        elif row == "speed":
+            hint = _t("hint.speed", lang, min=f"{SPEED_MIN:.1f}", max=f"{SPEED_MAX:.1f}")
+        elif row in ("voice", "switch", "pause", "language"):
+            hint = _t(f"hint.{row}", lang)
         else:
-            hint = HINT.get(row or "", "")
+            hint = ""
         self._main.query_one("#hint", Static).update(hint)
         self._main.query_one("#msg", Static).update(self._message)
 
@@ -542,7 +648,7 @@ class SettingsApp(App):
             self.view.speed = speed
             self._render_all()
             await self._set("speed", speed)
-            self._schedule_preview(self.view.speaker_id, SPEED_SAMPLE)
+            self._schedule_preview(self.view.speaker_id, _t("sample.speed", self.lang))
         elif row == "model":
             self.view.model = cycle_model(self.view.model, delta)
             self._render_all()
@@ -554,6 +660,11 @@ class SettingsApp(App):
             self.view.mic_device = mic
             self._render_all()
             await self._set("mic", mic_value(mic))
+        elif row == "language":
+            lang = other_language(self.lang, delta)
+            self.view.lang = lang  # redraw in it now; the reply (config.toml) confirms it
+            self._render_all()
+            await self._set("language", lang)
 
     async def _set(self, key: str, value: Any) -> None:
         self._pending += 1
@@ -570,7 +681,7 @@ class SettingsApp(App):
         if not self._groups:
             await self._load_voices()
         if not self._groups:
-            self._say("Cannot reach VOICEVOX, so the voice list is unavailable")
+            self._say(_t("no_voicevox", self.lang))
             return
 
         def picked(sid: int | None) -> None:
@@ -583,7 +694,7 @@ class SettingsApp(App):
 
         self.push_screen(
             VoiceScreen(self._groups, self.view.speaker_id,
-                        lambda sid: self._schedule_preview(sid, VOICE_SAMPLE)),
+                        lambda sid: self._schedule_preview(sid, _t("sample.voice", self.lang)), self.lang),
             picked,
         )
 
@@ -592,7 +703,7 @@ class SettingsApp(App):
     def _schedule_preview(self, speaker_id: int | None, text: str) -> None:
         if not self.view.online or speaker_id is None:
             if not self.view.online:
-                self._say(STOPPED)
+                self._say(_t("stopped", self.lang))
             return
         if self._preview_timer is not None:
             self._preview_timer.stop()

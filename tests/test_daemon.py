@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -375,6 +376,7 @@ async def test_resume_with_a_broken_mic_stays_paused(parts):
     await task
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no POSIX signals on Windows")
 async def test_sigterm_closes_the_session_then_the_audio(parts):
     calls, audio, vad, ep, orch, log = parts
     d = make(parts)
@@ -389,6 +391,7 @@ async def test_sigterm_closes_the_session_then_the_audio(parts):
     assert not asyncio.get_running_loop().remove_signal_handler(signal.SIGTERM)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no POSIX signals on Windows")
 async def test_sigint_also_shuts_down(parts):
     calls, *_ = parts
     d = make(parts)
@@ -809,15 +812,24 @@ def test_already_running_check_skips_the_heavy_imports(tmp_path):
     import subprocess
     import sys
 
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(tmp_path / "zundamon-jarvis.sock"))
-    srv.listen(1)
+    if sys.platform == "win32":  # the endpoint is control.json (port + token) in LOCALAPPDATA
+        srv = socket.create_server(("127.0.0.1", 0))
+        run_dir = tmp_path / "zundamon-jarvis" / "run"
+        run_dir.mkdir(parents=True)
+        (run_dir / "control.json").write_text(
+            json.dumps({"port": srv.getsockname()[1], "token": "t"}), encoding="utf-8")
+        env = {"LOCALAPPDATA": str(tmp_path)}
+    else:
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(str(tmp_path / "zundamon-jarvis.sock"))
+        srv.listen(1)
+        env = {"XDG_RUNTIME_DIR": str(tmp_path)}
     try:
         code = ("import sys; from zundamon_jarvis.daemon import main; r = main([]); "
                 "print(r, [m for m in ('faster_whisper', 'onnxruntime', 'sounddevice', "
                 "'claude_agent_sdk') if m in sys.modules])")
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                             env={**os.environ, "XDG_RUNTIME_DIR": str(tmp_path)}, timeout=30)
+                             env={**os.environ, **env}, timeout=30)
     finally:
         srv.close()
     assert out.stdout.strip() == "3 []", out.stderr
@@ -1218,6 +1230,27 @@ def test_duplex_auto_uses_builtin_speaker_detection():
     assert duplex_check("half", "linux", builtin_speaker=builtin)() is True
     assert duplex_check("full", "mac", builtin_speaker=builtin) is None
     assert seen == ["mac"]  # "half" / "full" never ask
+
+
+def test_duplex_auto_on_windows_is_half_unless_the_output_is_headphones():
+    seen = []
+
+    def headphones(system):
+        seen.append(system)
+        return seen[-1] == "windows" and len(seen) > 1
+
+    def no_mac(system):
+        raise AssertionError("no Mac speaker detection on Windows")
+
+    check = duplex_check("auto", "windows", builtin_speaker=no_mac, headphones=headphones)
+    assert check is not None
+    assert check() is True  # speakers (or unknown): half duplex
+    assert check() is False  # headphones now: full duplex, asked again each time
+    assert seen == ["windows", "windows"]
+    assert duplex_check("full", "windows", headphones=headphones) is None
+    assert duplex_check("half", "windows", headphones=lambda s: True)() is True
+    assert duplex_check("auto", "linux", headphones=no_mac) is None
+    assert duplex_check("auto", "mac", builtin_speaker=lambda s: False, headphones=no_mac)() is False
 
 
 async def test_full_duplex_unchanged_on_linux(parts):

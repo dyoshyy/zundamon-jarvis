@@ -1,7 +1,7 @@
 [project]
 name = "zundamon-jarvis"
 version = "0.1.0"
-description = "A voice assistant that talks to Claude Code, voiced by VOICEVOX Zundamon (Linux and Apple Silicon Mac)"
+description = "A voice assistant that talks to Claude Code, voiced by VOICEVOX Zundamon (macOS, Windows, Linux)"
 readme = "README.md"
 authors = [
     { name = "dyoshyy" }
@@ -9,14 +9,20 @@ authors = [
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "claude-agent-sdk>=0.2.174",
-    "faster-whisper>=1.2.1,<2; sys_platform == 'linux'",
+    "faster-whisper>=1.2.1,<2; sys_platform == 'linux' or sys_platform == 'win32'",
     "httpx>=0.28.1",
     "mlx-whisper>=0.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "numpy>=2.5.4",
-    "nvidia-cublas-cu12>=12.9.2.10; sys_platform == 'linux'",
+    "nvidia-cublas-cu12>=12.9.2.10; sys_platform == 'linux' or sys_platform == 'win32'",
     "nvidia-cudnn-cu12>=9.27.0.42; sys_platform == 'linux'",
+    # Windows: the version of the cudnn64_9.dll that CTranslate2's Windows wheels bundle (it
+    # loads these sub-libraries and rejects another version; see zundamon_jarvis.stt)
+    "nvidia-cudnn-cu12==9.10.2.21; sys_platform == 'win32'",
     "onnxruntime>=1.31.0",
+    "pillow>=12.0.0; sys_platform == 'win32'",
+    "pystray>=0.19.5; sys_platform == 'win32'",
     "rumps>=0.4.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "pywebview>=6.2; sys_platform == 'win32' or (sys_platform == 'darwin' and platform_machine == 'arm64')",
     "sounddevice>=0.5.6",
     "textual>=8.2.8",
 ]
@@ -24,6 +30,10 @@ dependencies = [
 [project.scripts]
 zundamon-jarvis = "zundamon_jarvis.cli:main"
 zundamon-jarvisctl = "zundamon_jarvis.ctl:main"
+
+# Windows: uv makes a no-console zundamon-jarvisw.exe from this; the Run key starts the supervisor with it
+[project.gui-scripts]
+zundamon-jarvisw = "zundamon_jarvis.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.8,<0.12.0"]
@@ -44,4 +54,5 @@ addopts = "-m 'not integration'"
 environments = [
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]

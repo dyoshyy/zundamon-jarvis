@@ -1,12 +1,13 @@
 import asyncio
 import json
 import os
-import socket
 import stat
+import time
 
 import pytest
 
-from zundamon_jarvis import control
+from helpers import WINDOWS, endpoint, open_endpoint
+from zundamon_jarvis import control, transport
 
 
 class Target:
@@ -57,16 +58,21 @@ async def test_unknown_command_is_an_error_and_does_nothing():
 
 
 def test_socket_path_is_in_the_runtime_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    assert control.socket_path() == tmp_path / "zundamon-jarvis.sock"
+    if WINDOWS:
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert control.socket_path() == tmp_path / "zundamon-jarvis" / "run" / "control.json"
+    else:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+        assert control.socket_path() == tmp_path / "zundamon-jarvis.sock"
 
 
 async def test_server_round_trip_over_the_socket(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     t = Target("listening")
     server = await control.serve(t, path)
     try:
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        if not WINDOWS:  # no mode bits there: the TCP token guards the endpoint instead
+            assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
         resp = await asyncio.to_thread(control.request, "toggle", path)
         assert resp == {"state": "paused", "text": "Paused"}
         resp = await asyncio.to_thread(control.request, "status", path)
@@ -77,8 +83,8 @@ async def test_server_round_trip_over_the_socket(tmp_path):
 
 
 async def test_server_replaces_a_stale_socket_but_refuses_a_live_one(tmp_path):
-    path = tmp_path / "j.sock"
-    path.write_text("")  # stale leftover from a crash
+    path = endpoint(tmp_path)
+    path.write_text("", encoding="utf-8")  # stale leftover from a crash
     server = await control.serve(Target(), path)
     try:
         with pytest.raises(RuntimeError, match="already running"):
@@ -90,14 +96,14 @@ async def test_server_replaces_a_stale_socket_but_refuses_a_live_one(tmp_path):
 
 def test_request_without_a_daemon_raises_oserror(tmp_path):
     with pytest.raises(OSError):
-        control.request("status", tmp_path / "nobody.sock")
+        control.request("status", endpoint(tmp_path, "nobody"))
 
 
 async def test_reply_is_one_json_line(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target("speaking"), path)
     try:
-        reader, writer = await asyncio.open_unix_connection(str(path))
+        reader, writer = await open_endpoint(path)
         writer.write(b"status\n")
         await writer.drain()
         raw = await reader.read()
@@ -110,7 +116,7 @@ async def test_reply_is_one_json_line(tmp_path):
 
 
 async def test_a_bare_liveness_probe_is_not_an_error(tmp_path, caplog):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     t = Target()
     server = await control.serve(t, path)
     try:
@@ -130,7 +136,9 @@ async def test_a_bare_liveness_probe_is_not_an_error(tmp_path, caplog):
 async def test_offline_shows_a_short_english_reason(reasons, text):
     t = Target("offline")
     t.offline_reasons = set(reasons)
-    assert await control.handle("status", t) == {"state": "offline", "text": text}
+    resp = await control.handle("status", t)
+    assert {k: resp[k] for k in ("state", "text")} == {"state": "offline", "text": text}
+    assert resp.get("reasons", []) == sorted(reasons)
 
 
 async def test_reasons_only_show_while_offline():
@@ -151,7 +159,7 @@ def fixed_now():
 
 
 async def open_watch(path):
-    reader, writer = await asyncio.open_unix_connection(str(path), limit=2**22)
+    reader, writer = await open_endpoint(path, limit=2**22)
     writer.write(b"watch\n")
     await writer.drain()
     return reader, writer
@@ -166,7 +174,7 @@ async def read_event(reader, timeout=1.0):
 @pytest.fixture
 async def watch_server(tmp_path):
     hub = control.WatchHub(now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     yield hub, path
     hub.close()
@@ -213,7 +221,7 @@ async def test_live_only_events_reach_watchers_but_not_the_history(watch_server)
 
 async def test_history_keeps_only_the_latest_events(tmp_path):
     hub = control.WatchHub(history=3, now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     try:
         for i in range(10):
@@ -255,13 +263,17 @@ async def test_a_watcher_that_leaves_is_forgotten(watch_server):
     hub.publish("heard", text="誰もいない")  # nothing to write to: fine
 
 
+# asyncio runs a timer up to the clock's resolution early (15.6 ms on Windows): a 10 ms sleep there
+# would not wait at all, and the publisher would outrun any reader.
+TICK = 0.01 + time.get_clock_info("monotonic").resolution
+
+
 async def test_a_stuck_watcher_is_dropped_without_blocking_the_others(tmp_path):
     hub = control.WatchHub(queue_max=8, now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     try:
-        slow = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # never reads a byte
-        slow.connect(str(path))
+        slow = transport.connect(path, 2)  # never reads a byte
         slow.sendall(b"watch\n")
         fast_reader, fast_writer = await open_watch(path)
         await asyncio.sleep(0.05)
@@ -281,11 +293,11 @@ async def test_a_stuck_watcher_is_dropped_without_blocking_the_others(tmp_path):
             t0 = loop.time()
             hub.publish("heard", text=big)
             assert loop.time() - t0 < 0.05  # publishing never waits for a watcher
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(TICK)
         for _ in range(200):
             if len(got) == 60:
                 break
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(TICK)
         assert len(got) == 60  # the reading watcher missed nothing
         assert hub.watchers == 1  # the stuck one was dropped
         fast.cancel()
@@ -299,7 +311,7 @@ async def test_a_stuck_watcher_is_dropped_without_blocking_the_others(tmp_path):
 
 async def test_closing_the_hub_ends_every_watch_so_the_server_can_close(tmp_path):
     hub = control.WatchHub(now=fixed_now)
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path, hub=hub)
     reader, _ = await open_watch(path)
     await read_event(reader)
@@ -312,7 +324,7 @@ async def test_closing_the_hub_ends_every_watch_so_the_server_can_close(tmp_path
 
 
 async def test_watch_without_a_hub_is_an_error(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     server = await control.serve(Target(), path)
     try:
         resp = await asyncio.to_thread(control.request, "watch", path)
@@ -367,6 +379,13 @@ async def test_set_passes_key_and_value_and_adds_the_status():
     assert "error" in await control.handle("set speed 9", t, s)
 
 
+async def test_set_language_goes_to_the_settings():
+    t, s = Target(), FakeSettings()
+    await control.handle("set language en", t, s)
+    assert s.calls == [("set", "language", "en")]
+    assert "language" in (await control.handle("set language", t, s))["error"]
+
+
 @pytest.mark.parametrize("line", ["set", "set speed", "set  ", "preview", "preview 3",
                                   "preview 3 1.2", "get extra", "newsession now"])
 async def test_malformed_settings_commands_are_errors(line):
@@ -393,7 +412,7 @@ async def test_settings_commands_without_settings_are_errors():
 
 
 async def test_settings_round_trip_over_the_socket(tmp_path):
-    path = tmp_path / "j.sock"
+    path = endpoint(tmp_path)
     s = FakeSettings()
     server = await control.serve(Target(), path, settings=s)
     try:
@@ -425,3 +444,13 @@ async def test_status_adds_login_false_only_when_logged_out():
     assert "login" not in await control.handle("status", t)
     t.login_ok = False
     assert await control.handle("status", t) == {"state": "listening", "text": "Listening", "login": False}
+
+
+def test_status_label_follows_the_display_language():
+    off = control.status_of("offline", {"tts", "mic"})
+    assert off == {"state": "offline", "text": "Offline (mic, voice)", "reasons": ["mic", "tts"]}
+    assert control.status_label(off, "en") == "Offline (mic, voice)"
+    assert control.status_label(off, "ja") == "オフライン（マイク・音声）"
+    assert control.status_label({"state": "listening", "text": "Listening"}, "ja") == "聞き取り中"
+    assert control.status_label({"state": "paused"}) == "一時停止中"  # the tests' display language
+    assert control.status_label({"state": "newthing", "text": "New"}, "ja") == "New"

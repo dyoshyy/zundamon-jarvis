@@ -3,13 +3,23 @@
 `menu_model` is a pure function (status dict from the control socket, or None when the daemon is
 not running -> what to draw); `run_menubar` draws it with rumps (macOS arm64 only, imported there).
 Quitting closes only the menu bar app; the daemon (LaunchAgent) keeps running.
+
+The Windows tray icon (``zundamon_jarvis.tray``) draws the same model: ``menu_model(status,
+"windows")`` only swaps the quit label and the OS-specific microphone advice. Labels are in the
+display language (``zundamon_jarvis.i18n``), read on every draw: a change in the settings
+window shows within one poll.
+
+When a newer release is out (``zundamon_jarvis.update``, looked up in the background: a minute
+after start, then every 6 h, cached), ``menu_model(..., update=tag)`` adds "Update to <tag>…" above
+the quit item and a note; the item runs ``zundamon-jarvis update --yes`` detached.
 """
 
 import threading
 from dataclasses import dataclass, field
 
-from zundamon_jarvis import ctl
-from zundamon_jarvis.control import request
+from zundamon_jarvis import ctl, i18n
+from zundamon_jarvis import update as updater
+from zundamon_jarvis.control import request, status_label
 
 POLL_S = 2
 REQUEST_TIMEOUT_S = 1.0
@@ -17,10 +27,40 @@ REQUEST_TIMEOUT_S = 1.0
 TITLE_ICON = {**ctl.STATE_ICON, "thinking": "⏳", "speaking": "🔊"}
 DOWN_ICON = "💤"
 
-# The daemon is uv's python3.12 (a LaunchAgent), and that is the name macOS lists.
-MIC_NOTE = ("マイクが使えません。システム設定 > プライバシーとセキュリティ > マイク で、"
-            "「python3.12」をオンにしてください")
-LOGIN_NOTE = "Claude にログインしていません。ターミナルで `claude` を実行してログインしてください"
+TEXT = {
+    "not_running": {"ja": "停止中", "en": "Not running"},
+    "pause": {"ja": "一時停止", "en": "Pause"},
+    "resume": {"ja": "再開", "en": "Resume"},
+    "conversation": {"ja": "会話…", "en": "Conversation…"},
+    "settings": {"ja": "設定…", "en": "Settings…"},
+    "quit.mac": {"ja": "メニューバーを終了（本体は動き続けます）", "en": "Quit menu bar (daemon keeps running)"},
+    "quit.windows": {"ja": "トレイを終了（本体は動き続けます）", "en": "Quit tray (daemon keeps running)"},
+    # The daemon is uv's python3.12 (a LaunchAgent), and that is the name macOS lists.
+    "mic.mac": {
+        "ja": "マイクが使えません。システム設定 > プライバシーとセキュリティ > マイク で、「python3.12」をオンにしてください",
+        "en": "The mic is blocked. Turn on “python3.12” in System Settings > Privacy & Security > Microphone",
+    },
+    # Windows lists plain Win32 programs only under the "desktop apps" switch, not one by one.
+    "mic.windows": {
+        "ja": ("マイクが使えません。設定 > プライバシーとセキュリティ > マイク で、"
+               "「デスクトップ アプリがマイクにアクセスできるようにする」をオンにしてください"),
+        "en": ("The mic is blocked. In Settings > Privacy & security > Microphone, "
+               "turn on “Let desktop apps access your microphone”"),
+    },
+    "login": {
+        "ja": "Claude にログインしていません。ターミナルで `claude` を実行してログインしてください",
+        "en": "Not signed in to Claude. Run `claude` in a terminal to sign in",
+    },
+}
+
+
+def _mic_blocked(status: dict) -> bool:
+    if status.get("state") != "offline":
+        return False
+    reasons = status.get("reasons")
+    if isinstance(reasons, list):
+        return "mic" in reasons
+    return "mic" in str(status.get("text", ""))  # a daemon from before "reasons"
 
 
 _UNSET = object()  # nothing polled yet
@@ -29,7 +69,7 @@ _UNSET = object()  # nothing polled yet
 @dataclass(frozen=True)
 class MenuItem:
     label: str
-    action: str | None  # "pause" | "resume" | "conversation" | "settings" | "quit" | None (just a label)
+    action: str | None  # "pause" | "resume" | "conversation" | "settings" | "update" | "quit" | None (just a label)
     enabled: bool = True
 
 
@@ -40,27 +80,45 @@ class MenuModel:
     note: str | None = None
 
 
-def menu_model(status: dict | None) -> MenuModel:
-    quit_item = MenuItem("Quit menu bar (daemon keeps running)", "quit")
+def with_update(model: MenuModel, tag: str, lang: str | None = None) -> MenuModel:
+    """``model`` with "Update to <tag>…" above its last (quit) item, and a note saying so."""
+    items = [*model.items[:-1], MenuItem(updater.menu_text("item", tag, lang), "update"), *model.items[-1:]]
+    note = "\n".join(n for n in (model.note, updater.menu_text("note", tag, lang)) if n)
+    return MenuModel(model.title, items, note)
+
+
+def menu_model(status: dict | None, system: str = "mac", lang: str | None = None, *,
+               update: str | None = None) -> MenuModel:
+    """What to draw for ``status``, labelled in ``lang`` (default: the display language now);
+    ``update``: a newer release's tag to offer."""
+    lang = lang or i18n.language()
+    if update:
+        return with_update(menu_model(status, system, lang), update, lang)
+
+    def t(key: str) -> str:
+        return i18n.text(TEXT, key, lang)
+
+    os_key = "windows" if system == "windows" else "mac"
+    quit_item = MenuItem(t(f"quit.{os_key}"), "quit")
     if status is None:
         return MenuModel(DOWN_ICON, [
-            MenuItem("Not running", None, False),
-            MenuItem("Pause", "pause", False),
-            MenuItem("Conversation…", "conversation", False),
-            MenuItem("Settings…", "settings", False),
+            MenuItem(t("not_running"), None, False),
+            MenuItem(t("pause"), "pause", False),
+            MenuItem(t("conversation"), "conversation", False),
+            MenuItem(t("settings"), "settings", False),
             quit_item,
         ])
-    state, text = status.get("state", ""), status.get("text", "")
+    state = status.get("state", "")
     notes = []
-    if state == "offline" and "mic" in text:
-        notes.append(MIC_NOTE)
+    if _mic_blocked(status):
+        notes.append(t(f"mic.{os_key}"))
     if status.get("login") is False:
-        notes.append(LOGIN_NOTE)
+        notes.append(t("login"))
     return MenuModel(TITLE_ICON.get(state, "•"), [
-        MenuItem(text or state, None, False),
-        MenuItem("Resume", "resume") if state == "paused" else MenuItem("Pause", "pause"),
-        MenuItem("Conversation…", "conversation"),
-        MenuItem("Settings…", "settings"),
+        MenuItem(status_label(status, lang) or state, None, False),
+        MenuItem(t("resume"), "resume") if state == "paused" else MenuItem(t("pause"), "pause"),
+        MenuItem(t("conversation"), "conversation"),
+        MenuItem(t("settings"), "settings"),
         quit_item,
     ], "\n".join(notes) or None)
 
@@ -79,6 +137,8 @@ def run_menubar() -> int:
     app = rumps.App("ZundamonJarvis", title=DOWN_ICON, quit_button=None)
     shown: list[MenuModel | None] = [None]
     latest: list[object] = [_UNSET]  # written by the poll thread, read on the main thread
+    newer: list[str | None] = [None]  # written by the update check's thread
+    updater.start_watch(lambda tag: newer.__setitem__(0, tag))
 
     def act(action: str | None) -> None:
         def run() -> None:
@@ -89,6 +149,8 @@ def run_menubar() -> int:
                     pass
             elif action in ("conversation", "settings"):
                 ctl.open_window("watch" if action == "conversation" else "settings")
+            elif action == "update":
+                updater.launch_from_menu("mac")
         if action == "quit":
             rumps.quit_application()
         elif action:
@@ -113,7 +175,7 @@ def run_menubar() -> int:
 
     def tick(_timer: object) -> None:
         if latest[0] is not _UNSET:
-            render(menu_model(latest[0]))  # type: ignore[arg-type]
+            render(menu_model(latest[0], update=newer[0]))  # type: ignore[arg-type]
         threading.Thread(target=poll_once, daemon=True).start()
 
     timer = rumps.Timer(tick, POLL_S)

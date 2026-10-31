@@ -1,18 +1,21 @@
 """Control socket: one text command per connection, one JSON line back.
 
-Commands: ``toggle`` / ``pause`` / ``resume`` / ``status``. Every reply is the status after
+Commands: ``toggle`` / ``pause`` / ``resume`` / ``status`` / ``quit`` (the daemon shuts down
+cleanly and the reply adds ``"quitting": true``; Windows has no SIGTERM). Every reply is the status after
 the command: ``{"state": "<State>", "text": "<short English label>"}`` (offline adds
-the reason: ``Offline (mic)`` / ``Offline (voice)``); an unknown command gets
-``{"error": "..."}``. Stdlib only, so ``zundamon-jarvisctl`` (run by the status bar every few seconds)
+the reason: ``Offline (mic)`` / ``Offline (voice)``, and ``"reasons": ["mic"|"tts", ...]``); an
+unknown command gets ``{"error": "..."}``. ``text`` stays English (scripts read it); what is shown
+on screen is ``status_label(status)``, in the display language (``zundamon_jarvis.i18n``). Stdlib only, so ``zundamon-jarvisctl`` (run by the status bar every few seconds)
 starts fast.
 
 Settings (``zundamon_jarvis.live_settings``; the settings window and ``zundamon-jarvisctl get|set``) reply with
 the same status plus their own fields:
 
 - ``get`` -> ``"settings": {speed, speaker_id, model, session_model, models, mic_device,
-  mic_active, speed_min, speed_max}``
+  mic_active, speed_min, speed_max, language}``
 - ``set speed <0.8..2.0>`` / ``set speaker <style id>`` / ``set model sonnet|opus|haiku`` /
-  ``set mic default|<source name>|<device index>`` (saved; applies on restart) ->
+  ``set mic default|<source name>|<device index>`` (saved; applies on restart) /
+  ``set language ja|en`` (saved; the windows and menus follow when they next draw) ->
   ``"ok": true, "saved": <written to config.toml>, "settings": {...}``
 - ``preview <style id> <speed> <text>`` -> ``"ok": true`` (playing), or ``"ok": false,
   "busy": "user_speaking"|"speaking"|"replaced"`` (nothing played)
@@ -37,7 +40,6 @@ import asyncio
 import json
 import logging
 import os
-import socket
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -45,7 +47,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from zundamon_jarvis import platform
+from zundamon_jarvis import i18n, platform, transport
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +60,19 @@ STATE_TEXT = {  # UI labels are English; what ZundamonJarvis says follows the sp
     "offline": "Offline",
 }
 REASON_TEXT = {"mic": "mic", "tts": "voice"}
-COMMANDS = ("toggle", "pause", "resume", "status", "debug")
+TEXT = {  # status_label: the same labels in the display language
+    "listening": {"ja": "聞き取り中", "en": "Listening"},
+    "paused": {"ja": "一時停止中", "en": "Paused"},
+    "thinking": {"ja": "考え中", "en": "Thinking"},
+    "speaking": {"ja": "話し中", "en": "Speaking"},
+    "limit": {"ja": "利用上限", "en": "Limit"},
+    "offline": {"ja": "オフライン", "en": "Offline"},
+    "reason.mic": {"ja": "マイク", "en": "mic"},
+    "reason.tts": {"ja": "音声", "en": "voice"},
+    "with_reasons": {"ja": "{state}（{reasons}）", "en": "{state} ({reasons})"},
+    "reason_sep": {"ja": "・", "en": ", "},
+}
+COMMANDS = ("toggle", "pause", "resume", "status", "debug", "quit")
 SETTINGS_COMMANDS = ("get", "set", "preview", "newsession")
 HISTORY_MAX = 50
 WATCH_QUEUE_MAX = 256
@@ -90,9 +104,26 @@ def status_of(state: str, offline_reasons: Iterable[str] = (), login_ok: bool = 
     if state == "offline" and reasons:
         text = f"{text} ({', '.join(reasons)})"
     status = {"state": state, "text": text}
+    if state == "offline" and reasons:
+        status["reasons"] = sorted(offline_reasons)
     if not login_ok:
         status["login"] = False
     return status
+
+
+def status_label(status: dict, lang: str | None = None) -> str:
+    """The status (``status_of``'s dict) as shown on screen, in ``lang`` (default the display
+    language); a state this version does not know shows the daemon's own ``text``."""
+    state = str(status.get("state", ""))
+    if state not in TEXT:
+        return str(status.get("text") or state)
+    lang = lang or i18n.language()
+    label = i18n.text(TEXT, state, lang)
+    reasons = [r for r in status.get("reasons") or () if isinstance(r, str)]
+    if state == "offline" and reasons:
+        names = [i18n.text(TEXT, f"reason.{r}", lang) if f"reason.{r}" in TEXT else r for r in sorted(reasons)]
+        label = i18n.text(TEXT, "with_reasons", lang, state=label, reasons=i18n.text(TEXT, "reason_sep", lang).join(names))
+    return label
 
 
 def _status_of_target(target: "Controllable") -> dict:
@@ -114,7 +145,7 @@ async def _settings_command(line: str, settings: Settings | None) -> dict:
         parts = line.split(maxsplit=3)  # the text keeps its inner spaces
         if len(parts) == 4:
             return await settings.preview(parts[1], parts[2], parts[3])
-    usage = {"get": "get", "newsession": "newsession", "set": "set speed|speaker|model|mic <value>",
+    usage = {"get": "get", "newsession": "newsession", "set": "set speed|speaker|model|mic|language <value>",
              "preview": "preview <speaker id> <speed> <text>"}[cmd]
     return {"error": f"usage: {usage}"}
 
@@ -133,6 +164,12 @@ async def handle(line: str, target: Controllable, settings: Settings | None = No
         await target.pause()
     elif cmd == "resume":
         await target.resume()
+    elif cmd == "quit":  # Windows has no SIGTERM: the supervisor and `uninstall` stop it this way
+        stop = getattr(target, "stop", None)
+        if stop is None:
+            return {"error": "quit: not available"}
+        stop()
+        return {**_status_of_target(target), "quitting": True}
     elif cmd == "debug":
         debug = getattr(target, "debug", None)
         if debug is None:
@@ -239,13 +276,7 @@ class WatchHub:
 
 
 def is_live(path: Path) -> bool:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(1)
-        try:
-            s.connect(str(path))
-        except OSError:
-            return False
-    return True
+    return transport.is_live(path)
 
 
 async def serve(
@@ -283,22 +314,14 @@ async def serve(
             except Exception:
                 pass
 
-    old_umask = os.umask(0o177)  # the socket is created 0600 from the start
-    try:
-        server = await asyncio.start_unix_server(on_client, path=str(path))
-    finally:
-        os.umask(old_umask)
-    os.chmod(path, 0o600)
-    return server
+    return await transport.start_server(on_client, path)
 
 
 def request(cmd: str, path: Path | None = None, timeout: float = 3.0) -> dict:
     """Send one command to the running daemon. Raises OSError if none is listening."""
     path = path or socket_path()
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        deadline = time.monotonic() + timeout  # one budget for connect, send and read
-        s.settimeout(timeout)
-        s.connect(str(path))
+    deadline = time.monotonic() + timeout  # one budget for connect, send and read
+    with transport.connect(path, timeout) as s:
         s.sendall(cmd.encode() + b"\n")
         chunks = []
         while True:

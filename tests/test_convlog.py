@@ -1,6 +1,9 @@
 import asyncio
 import json
+import sys
 from datetime import date, datetime, timedelta, timezone
+
+import pytest
 
 from zundamon_jarvis.convlog import (
     ConversationLog,
@@ -16,7 +19,7 @@ JST = timezone(timedelta(hours=9))
 
 
 def lines(path):
-    return [json.loads(x) for x in path.read_text().splitlines()]
+    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
 
 
 def make_log(tmp_path, when=datetime(2026, 10, 24, 10, 0, 0, tzinfo=JST)):
@@ -28,9 +31,9 @@ def make_log(tmp_path, when=datetime(2026, 10, 24, 10, 0, 0, tzinfo=JST)):
 def test_prune_keeps_14_days_and_ignores_other_files(tmp_path):
     today = date(2026, 10, 24)
     for days in range(0, 20):
-        (tmp_path / f"{today - timedelta(days=days)}.jsonl").write_text("{}\n")
-    (tmp_path / "notes.txt").write_text("x")
-    (tmp_path / "weird.jsonl").write_text("x")
+        (tmp_path / f"{today - timedelta(days=days)}.jsonl").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "weird.jsonl").write_text("x", encoding="utf-8")
     removed = prune(tmp_path, today)
     left = sorted(p.name for p in tmp_path.glob("*.jsonl") if p.name != "weird.jsonl")
     assert left[0] == "2026-10-11.jsonl" and left[-1] == "2026-10-24.jsonl"
@@ -116,6 +119,7 @@ def test_log_dir_is_created(tmp_path):
 
 # ---- migration from the pre-rename directory ----
 
+@pytest.mark.skipif(sys.platform == "win32", reason="XDG_STATE_HOME is where Linux keeps the logs")
 def test_log_dirs_follow_xdg_state_home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     assert log_dir() == tmp_path / "zundamon-jarvis"
@@ -125,25 +129,25 @@ def test_log_dirs_follow_xdg_state_home(tmp_path, monkeypatch):
 def test_migrate_moves_the_legacy_logs_and_removes_the_empty_dir(tmp_path):
     legacy = tmp_path / "jarvis"
     legacy.mkdir()
-    (legacy / "2026-10-23.jsonl").write_text('{"heard": "a"}\n')
-    (legacy / "2026-10-24.jsonl").write_text('{"heard": "b"}\n')
+    (legacy / "2026-10-23.jsonl").write_text('{"heard": "a"}\n', encoding="utf-8")
+    (legacy / "2026-10-24.jsonl").write_text('{"heard": "b"}\n', encoding="utf-8")
     new = tmp_path / "zundamon-jarvis"
     moved = migrate_legacy_logs(new, legacy)
     assert sorted(p.name for p in moved) == ["2026-10-23.jsonl", "2026-10-24.jsonl"]
-    assert (new / "2026-10-24.jsonl").read_text() == '{"heard": "b"}\n'
+    assert (new / "2026-10-24.jsonl").read_text(encoding="utf-8") == '{"heard": "b"}\n'
     assert not legacy.exists()
 
 
 def test_migrate_never_overwrites_a_log_already_in_the_new_dir(tmp_path):
     legacy = tmp_path / "jarvis"
     legacy.mkdir()
-    (legacy / "2026-10-24.jsonl").write_text("old\n")
-    (legacy / "notes.txt").write_text("keep me\n")
+    (legacy / "2026-10-24.jsonl").write_text("old\n", encoding="utf-8")
+    (legacy / "notes.txt").write_text("keep me\n", encoding="utf-8")
     new = tmp_path / "zundamon-jarvis"
     new.mkdir()
-    (new / "2026-10-24.jsonl").write_text("new\n")
+    (new / "2026-10-24.jsonl").write_text("new\n", encoding="utf-8")
     assert migrate_legacy_logs(new, legacy) == []
-    assert (new / "2026-10-24.jsonl").read_text() == "new\n"
+    assert (new / "2026-10-24.jsonl").read_text(encoding="utf-8") == "new\n"
     assert (legacy / "2026-10-24.jsonl").exists() and (legacy / "notes.txt").exists()
 
 
