@@ -48,6 +48,11 @@ class ChecksumError(RuntimeError):
     pass
 
 
+# progress(stage, done, total): stage is "download" (bytes of every part together; total None
+# until known), "extract" or "check" (done = total = 0: no measure, just the stage).
+Progress = Callable[[str, int, int | None], None]
+
+
 def default_dest(system: str) -> Path:
     return platform.data_dir(system) / "voicevox_engine"
 
@@ -56,9 +61,19 @@ def tar_command(system: str) -> str:
     return "/usr/bin/tar" if system == "mac" else "bsdtar"
 
 
-def fetch_url(url: str, dest: Path) -> None:
+def fetch_url(url: str, dest: Path, report: Callable[[int, int | None], None] | None = None) -> None:
+    """Download ``url`` to ``dest``; ``report(bytes_so_far, content_length)`` after each chunk."""
     with urllib.request.urlopen(url, timeout=60) as r, open(dest, "wb") as f:  # noqa: S310 - pinned https URLs
-        shutil.copyfileobj(r, f, 1 << 20)
+        if report is None:
+            shutil.copyfileobj(r, f, 1 << 20)
+            return
+        length = r.headers.get("Content-Length")
+        total = int(length) if length and length.isdigit() else None
+        done = 0
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+            done += len(chunk)
+            report(done, total)
 
 
 def sha256_file(path: Path) -> str:
@@ -124,7 +139,10 @@ def install_engine(
     fetch: Callable[[str, Path], None] = fetch_url,
     extract: Callable[[Sequence[Path], Path, str], None] = extract_archive,
     check: Callable[[Path], None] = check_runs,
+    progress: Progress | None = None,
 ) -> Path:
+    """Download, verify and unpack the pinned engine into ``dest`` (nothing to do when it is
+    there already). With ``progress`` the download goes ``fetch(url, path, report)``."""
     dest = Path(dest) if dest else default_dest(system)
     if _installed(dest):
         print(f"VOICEVOX engine {ENGINE['version']} already installed: {dest}")
@@ -136,9 +154,17 @@ def install_engine(
     tmp = Path(tempfile.mkdtemp(prefix=".engine-dl.", dir=dest.parent))
     try:
         files: list[Path] = []
+        before = 0  # bytes of the parts already fetched
         for url, want in parts_spec:
             f = tmp / url.rsplit("/", 1)[1]
-            fetch(url, f)
+            if progress is None:
+                fetch(url, f)
+            else:
+                def report(done: int, total: int | None, base: int = before) -> None:
+                    progress("download", base + done, None if total is None or len(parts_spec) > 1
+                             else total)
+                fetch(url, f, report)  # type: ignore[call-arg]
+                before += f.stat().st_size
             got = sha256_file(f)
             if got != want:
                 f.unlink(missing_ok=True)
@@ -146,6 +172,8 @@ def install_engine(
             files.append(f)
         out = tmp / "out"
         out.mkdir()
+        if progress is not None:
+            progress("extract", 0, 0)
         extract(files, out, tar_command(system))
         # extract_archive owns part cleanup (parts may already be gone)
         for f in files:
@@ -154,6 +182,8 @@ def install_engine(
         root = tops[0] if len(tops) == 1 and tops[0].is_dir() else out
         if not (root / "run").is_file():
             raise RuntimeError("extracted archive has no `run` executable")
+        if progress is not None:
+            progress("check", 0, 0)
         check(root / "run")
         (root / MARKER).write_text(ENGINE["version"])
         _swap_in(root, dest, tmp)

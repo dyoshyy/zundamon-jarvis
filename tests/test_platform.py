@@ -83,3 +83,18 @@ def test_mac_runtime_dir_rejects_foreign_owner(monkeypatch, tmp_path):
     (tmp_path / f"zundamon-jarvis-{uid + 1}").mkdir(mode=0o700)
     with pytest.raises(RuntimeError, match="owned by uid"):
         runtime_dir("mac")
+
+
+def test_windows_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    assert config_dir("windows") == tmp_path / "Roaming" / "zundamon-jarvis"
+    assert data_dir("windows") == tmp_path / "Local" / "zundamon-jarvis"
+    assert log_dir("windows") == tmp_path / "Local" / "zundamon-jarvis" / "logs"
+    assert socket_path("windows") == tmp_path / "Local" / "zundamon-jarvis" / "run" / "control.json"
+    assert (tmp_path / "Local" / "zundamon-jarvis" / "run").is_dir()
+
+
+def test_system_windows(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    assert system() == "windows"

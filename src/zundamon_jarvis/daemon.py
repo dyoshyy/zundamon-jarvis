@@ -40,6 +40,7 @@ Mic (AudioIn) -> SileroVad -> Endpointer -> Orchestrator, plus the control socke
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -308,7 +309,10 @@ class Daemon:
         signals = (signal.SIGTERM, signal.SIGINT)
         if install_signals:
             for sig in signals:
-                loop.add_signal_handler(sig, self.stop)
+                try:
+                    loop.add_signal_handler(sig, self.stop)
+                except NotImplementedError:  # Windows: stopped through the control socket (`quit`)
+                    break
         tasks: list[asyncio.Task] = []
         try:
             if self._start_paused:
@@ -327,7 +331,8 @@ class Daemon:
             finally:
                 if install_signals:
                     for sig in signals:
-                        loop.remove_signal_handler(sig)
+                        with contextlib.suppress(NotImplementedError):
+                            loop.remove_signal_handler(sig)
 
     async def _shutdown(self, tasks: list[asyncio.Task]) -> None:
         log.info("shutting down")

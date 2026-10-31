@@ -167,3 +167,33 @@ def test_install_engine_end_to_end_with_real_extract(tmp_path, monkeypatch):
     engine.install_engine("mac", dest, fetch=_fetch_factory(blobs), check=lambda r: None)
     assert (dest / "run").exists() and (dest / engine.MARKER).read_text() == engine.ENGINE["version"]
     assert [p.name for p in dest.parent.iterdir()] == ["voicevox_engine"]
+
+
+def test_progress_reports_bytes_across_parts_then_stages(tmp_path, monkeypatch):
+    blobs = {"http://x/a.001": b"aaa", "http://x/a.002": b"bb"}
+    _patch(monkeypatch, blobs)
+
+    def fetch(url, dest, report):
+        Path(dest).write_bytes(blobs[url])
+        report(len(blobs[url]), len(blobs[url]))
+
+    seen = []
+    engine.install_engine("mac", tmp_path / "voicevox_engine", fetch=fetch, extract=_extract_ok,
+                          check=lambda r: None, progress=lambda *a: seen.append(a))
+    # two parts: the overall total is unknown, but the byte count keeps adding up
+    assert seen == [("download", 3, None), ("download", 5, None), ("extract", 0, 0), ("check", 0, 0)]
+
+
+def test_progress_single_part_knows_the_total(tmp_path, monkeypatch):
+    blobs = {"http://x/a.001": b"abcd"}
+    _patch(monkeypatch, blobs)
+
+    def fetch(url, dest, report):
+        Path(dest).write_bytes(blobs[url])
+        report(2, 4)
+        report(4, 4)
+
+    seen = []
+    engine.install_engine("mac", tmp_path / "voicevox_engine", fetch=fetch, extract=_extract_ok,
+                          check=lambda r: None, progress=lambda *a: seen.append(a))
+    assert seen[:2] == [("download", 2, 4), ("download", 4, 4)]

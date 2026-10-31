@@ -1,6 +1,7 @@
 """Control socket: one text command per connection, one JSON line back.
 
-Commands: ``toggle`` / ``pause`` / ``resume`` / ``status``. Every reply is the status after
+Commands: ``toggle`` / ``pause`` / ``resume`` / ``status`` / ``quit`` (the daemon shuts down
+cleanly and the reply adds ``"quitting": true``; Windows has no SIGTERM). Every reply is the status after
 the command: ``{"state": "<State>", "text": "<short English label>"}`` (offline adds
 the reason: ``Offline (mic)`` / ``Offline (voice)``); an unknown command gets
 ``{"error": "..."}``. Stdlib only, so ``zundamon-jarvisctl`` (run by the status bar every few seconds)
@@ -37,7 +38,6 @@ import asyncio
 import json
 import logging
 import os
-import socket
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -45,7 +45,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from zundamon_jarvis import platform
+from zundamon_jarvis import platform, transport
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ STATE_TEXT = {  # UI labels are English; what ZundamonJarvis says follows the sp
     "offline": "Offline",
 }
 REASON_TEXT = {"mic": "mic", "tts": "voice"}
-COMMANDS = ("toggle", "pause", "resume", "status", "debug")
+COMMANDS = ("toggle", "pause", "resume", "status", "debug", "quit")
 SETTINGS_COMMANDS = ("get", "set", "preview", "newsession")
 HISTORY_MAX = 50
 WATCH_QUEUE_MAX = 256
@@ -133,6 +133,12 @@ async def handle(line: str, target: Controllable, settings: Settings | None = No
         await target.pause()
     elif cmd == "resume":
         await target.resume()
+    elif cmd == "quit":  # Windows has no SIGTERM: the supervisor and `uninstall` stop it this way
+        stop = getattr(target, "stop", None)
+        if stop is None:
+            return {"error": "quit: not available"}
+        stop()
+        return {**_status_of_target(target), "quitting": True}
     elif cmd == "debug":
         debug = getattr(target, "debug", None)
         if debug is None:
@@ -239,13 +245,7 @@ class WatchHub:
 
 
 def is_live(path: Path) -> bool:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(1)
-        try:
-            s.connect(str(path))
-        except OSError:
-            return False
-    return True
+    return transport.is_live(path)
 
 
 async def serve(
@@ -283,22 +283,14 @@ async def serve(
             except Exception:
                 pass
 
-    old_umask = os.umask(0o177)  # the socket is created 0600 from the start
-    try:
-        server = await asyncio.start_unix_server(on_client, path=str(path))
-    finally:
-        os.umask(old_umask)
-    os.chmod(path, 0o600)
-    return server
+    return await transport.start_server(on_client, path)
 
 
 def request(cmd: str, path: Path | None = None, timeout: float = 3.0) -> dict:
     """Send one command to the running daemon. Raises OSError if none is listening."""
     path = path or socket_path()
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        deadline = time.monotonic() + timeout  # one budget for connect, send and read
-        s.settimeout(timeout)
-        s.connect(str(path))
+    deadline = time.monotonic() + timeout  # one budget for connect, send and read
+    with transport.connect(path, timeout) as s:
         s.sendall(cmd.encode() + b"\n")
         chunks = []
         while True:

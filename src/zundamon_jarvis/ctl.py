@@ -26,7 +26,6 @@ user's Hyprland config.
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import threading
@@ -36,7 +35,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from zundamon_jarvis import desktop
+from zundamon_jarvis import desktop, transport
 from zundamon_jarvis.control import COMMANDS, request, socket_path
 
 USAGE = ("usage: zundamon-jarvisctl toggle|pause|resume|status|debug|get|bar|watch|settings"
@@ -262,9 +261,7 @@ class Loader:
 
 
 def _stream(path: Path, view: WatchView, emit: Callable[[str], None]) -> None:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-        s.settimeout(2)
-        s.connect(str(path))
+    with transport.connect(path, 2) as s:
         s.sendall(b"watch\n")
         s.settimeout(None)
         with s.makefile("rb") as f:
