@@ -16,6 +16,8 @@ dependencies = [
     "nvidia-cublas-cu12>=12.9.2.10; sys_platform == 'linux'",
     "nvidia-cudnn-cu12>=9.27.0.42; sys_platform == 'linux'",
     "onnxruntime>=1.31.0",
+    "pillow>=12.0.0; sys_platform == 'win32'",
+    "pystray>=0.19.5; sys_platform == 'win32'",
     "rumps>=0.4.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "sounddevice>=0.5.6",
     "textual>=8.2.8",
@@ -24,6 +26,10 @@ dependencies = [
 [project.scripts]
 zundamon-jarvis = "zundamon_jarvis.cli:main"
 zundamon-jarvisctl = "zundamon_jarvis.ctl:main"
+
+# Windows: uv makes a no-console zundamon-jarvisw.exe from this; the Run key starts the supervisor with it
+[project.gui-scripts]
+zundamon-jarvisw = "zundamon_jarvis.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.8,<0.12.0"]
