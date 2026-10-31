@@ -75,3 +75,25 @@ def test_windows_model_has_the_tray_quit_label_and_windows_mic_advice():
     assert m.items[-1] == menubar.MenuItem("Quit tray (daemon keeps running)", "quit")
     assert "デスクトップ アプリがマイクにアクセス" in m.note and "python3.12" not in m.note
     assert menubar.menu_model(None, "windows").items[-1].label.startswith("Quit tray")
+
+
+def test_menu_offers_a_newer_release_above_quit_with_a_note():
+    plain = menubar.menu_model({"state": "listening", "text": "Listening"})
+    m = menubar.menu_model({"state": "listening", "text": "Listening"}, update="v0.2.0")
+    assert m.items[:-2] == plain.items[:-1] and m.items[-1] == plain.items[-1]
+    assert m.items[-2].action == "update" and "v0.2.0" in m.items[-2].label and m.items[-2].enabled
+    assert "v0.2.0" in m.note
+    assert menubar.menu_model({"state": "listening", "text": "Listening"}, update=None) == plain
+
+
+def test_update_item_also_when_down_and_after_other_notes():
+    m = menubar.menu_model(None, "windows", update="v0.2.0")
+    assert [i.action for i in m.items][-2:] == ["update", "quit"]
+    both = menubar.menu_model({"state": "offline", "text": "Offline (mic)"}, update="v0.2.0")
+    assert both.note.index("マイク") < both.note.index("v0.2.0")
+
+
+def test_with_update_labels_per_language():
+    m = menubar.with_update(menubar.menu_model(None), "v0.2.0", "en")
+    assert m.items[-2].label == "Update to v0.2.0…"
+    assert menubar.with_update(menubar.menu_model(None), "v0.2.0", "ja").items[-2].label == "v0.2.0 に更新…"
