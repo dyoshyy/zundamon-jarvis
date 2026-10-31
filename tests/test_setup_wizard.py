@@ -356,3 +356,71 @@ def test_uninstall_skips_questions_for_missing_things(tmp_path):
     assert setup_wizard.run_uninstall(con, system="linux", uninstall=lambda s: None,
                                       engine_dir=tmp_path / "none", config_path=tmp_path / "c.toml") == 0
     assert con.prompts == []
+
+
+@pytest.mark.parametrize("system, needle", [
+    ("mac", "Mac のスピーカー"),
+    ("windows", "Windows にはエコーキャンセルがない"),
+    ("linux", "zundamon_jarvis_aec_source"),
+])
+def test_headphones_note_is_per_os(system, needle):
+    assert needle in setup_wizard.headphones_note(system)
+
+
+def test_mic_problem_note_per_os():
+    assert setup_wizard.mic_problem_note("mac", "open") == setup_wizard.TERMINAL_MIC_NOTE
+    assert "デスクトップ アプリ" in setup_wizard.mic_problem_note("windows", "silent")
+    assert "ミュート" in setup_wizard.mic_problem_note("linux", "silent")
+    assert "つながっているか" in setup_wizard.mic_problem_note("linux", "open")
+
+
+async def test_setup_windows_checks_the_daemon_mic_with_windows_advice(tmp_path):
+    kw, services, _ = fakes(tmp_path)
+    kw["system"] = "windows"
+    services.debug = {"paused": False, "frames_last_5s": 156, "max_abs_last_5s": 0.0}
+    con = FakeConsole("", "", "", "")
+    assert await setup_wizard.run_setup(con, **kw) == 0
+    assert con.text.count(setup_wizard.WINDOWS_DAEMON_MIC_NOTE) == 2
+    assert "doctor | clip" in setup_wizard.WINDOWS_DAEMON_MIC_NOTE
+    assert "python3.12" not in con.text and "pbcopy" not in con.text
+
+
+async def test_setup_linux_skips_the_daemon_mic_check(tmp_path):
+    kw, services, _ = fakes(tmp_path)
+    kw["system"] = "linux"
+    con = FakeConsole("", "", "")
+    assert await setup_wizard.run_setup(con, **kw) == 0
+    assert "debug" not in services.requests
+
+
+def test_engine_command_uses_the_gpu_on_windows(tmp_path):
+    run = tmp_path / "run.exe"
+    assert setup_wizard.engine_command(run, "windows")[-1] == "--use_gpu"
+    assert "--use_gpu" not in setup_wizard.engine_command(tmp_path / "run", "linux")
+    assert "creationflags" in setup_wizard._detached("windows")
+    assert setup_wizard._detached("mac") == {"start_new_session": True}
+
+
+def test_install_and_start_on_windows_only_installs(monkeypatch):
+    calls = []
+    monkeypatch.setattr("zundamon_jarvis.service.install_services", calls.append)
+    monkeypatch.setattr(setup_wizard.subprocess, "run", lambda *a, **k: calls.append(("run", a)))
+    setup_wizard.install_and_start("windows")
+    assert calls == ["windows"]
+
+
+def test_resolve_folder(tmp_path, home):
+    (home / "notes").mkdir()
+    assert setup_wizard.resolve_folder("~/notes") == home / "notes"
+    assert setup_wizard.resolve_folder("notes", cwd=home) == home / "notes"
+    assert setup_wizard.resolve_folder("'~/notes' ") == home / "notes"
+    assert setup_wizard.resolve_folder("~/missing") is None
+    assert setup_wizard.resolve_folder("  ") is None
+
+
+def test_save_model_rejects_unknown(tmp_path):
+    from zundamon_jarvis.config import Config
+
+    with pytest.raises(ValueError):
+        setup_wizard.save_model("gpt", Config(), tmp_path / "c.toml")
+    assert not (tmp_path / "c.toml").exists()

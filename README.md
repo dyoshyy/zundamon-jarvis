@@ -28,9 +28,12 @@ Supported environments: **linux-x86_64**, **macos-arm64** and **windows-x86_64**
 curl -fsSL https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.sh | sh
 ```
 
-The installer sets up uv, the VOICEVOX engine and the STT model, then runs `zundamon-jarvis setup`
-(login check, microphone permission, headphone advice, voice choice, knowledge folder, model, always-on
-service). Re-running it is safe; finished steps are skipped. A step-by-step walkthrough in Japanese is in
+The installer sets up uv and the app, then runs `zundamon-jarvis setup`, which opens a local setup page in
+your browser (served from 127.0.0.1 by the setup process; the terminal prints its URL). The page downloads
+the VOICEVOX engine and the STT model with progress and walks through the login check, microphone (with a
+level meter), headphone advice, voice choice (samples play on the computer's speakers), knowledge folder,
+model and always-on service. Re-running it is safe; finished steps are skipped. `ZJ_CLI=1` keeps everything
+in the terminal instead (`... | ZJ_CLI=1 sh`). A step-by-step walkthrough in Japanese is in
 [docs/mac-checklist.md](docs/mac-checklist.md).
 
 ## Install (Windows)
@@ -72,7 +75,8 @@ From a shell (every platform):
 - `zundamon-jarvisctl toggle | pause | resume | status`
 - `zundamon-jarvisctl watch` streams the conversation; `zundamon-jarvisctl settings` opens the settings window
 - `zundamon-jarvisctl get` / `set speed|speaker|model|mic <value>`
-- `zundamon-jarvis setup` re-runs the wizard; `zundamon-jarvis doctor` prints a diagnostic report;
+- `zundamon-jarvis setup` re-opens the setup page (`setup --cli`: the same questions in the terminal);
+  `zundamon-jarvis doctor` prints a diagnostic report;
   `zundamon-jarvis uninstall` removes the service and its files
 
 ## Configuration
@@ -106,10 +110,11 @@ and a systemd user session. **Clone to `~/repos/zundamon-jarvis`**: the systemd 
 mkdir -p ~/repos && git clone https://github.com/dyoshyy/zundamon-jarvis ~/repos/zundamon-jarvis
 cd ~/repos/zundamon-jarvis
 uv sync
-uv run zundamon-jarvis engine install    # downloads the VOICEVOX engine (add --cpu for the CPU build)
-uv run zundamon-jarvis models download   # downloads the speech-to-text model
-uv run zundamon-jarvis setup             # wizard; installs and starts the systemd user units
+uv run zundamon-jarvis setup   # setup page in the browser: downloads the engine and model, installs and starts the units
 ```
+
+Without a browser, in the terminal: `uv run zundamon-jarvis engine install` (add `--cpu` for the CPU build),
+`uv run zundamon-jarvis models download`, then `uv run zundamon-jarvis setup --cli`.
 
 By hand instead of the wizard's service step: copy `deploy/systemd/*.service` to `~/.config/systemd/user/`, run
 `systemctl --user daemon-reload`, then `systemctl --user enable --now voicevox zundamon-jarvis`.
@@ -195,8 +200,10 @@ or the Zundamon character.
 curl -fsSL https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.sh | sh
 ```
 
-uv、VOICEVOX エンジン、文字起こしモデルを用意し、`zundamon-jarvis setup`（ログイン確認、マイク許可、声選び、
-知識フォルダ、モデル、常駐設定）まで進みます。途中で止まっても同じ 1 行で続きから進みます。
+uv と本体を入れたあと、`zundamon-jarvis setup` がブラウザで設定画面を開きます。画面の中で VOICEVOX エンジンと
+文字起こしモデルを（進み具合を見せながら）ダウンロードし、ログイン確認、マイク（音のメーター付き）、声選び（試聴は
+パソコンのスピーカーから）、知識フォルダ、モデル、常駐設定まで進みます。途中で止まっても同じ 1 行で続きから進みます。
+ターミナルだけで設定したいときは `ZJ_CLI=1` を付けます（`… | ZJ_CLI=1 sh`）。
 詳しい手順は [docs/mac-checklist.md](docs/mac-checklist.md) を見てください。
 
 ## インストール（Windows）
@@ -223,7 +230,8 @@ Mac ではメニューバーのアイコンが状態を表し、メニューか�
 **Settings…**（速度・声・モデル・マイク）を開けます。メニューバーを終了しても常駐は止まりません。
 Windows ではトレイアイコン（隠れているときは `^` の中）が同じメニューを持ち、左クリックで会話を開きます。
 Conversation と Settings は Windows Terminal の窓で開きます。トレイを終了しても常駐は止まりません。
-シェルからは `zundamon-jarvisctl toggle|pause|resume|status|watch|settings|get|set`、`zundamon-jarvis setup|doctor|uninstall` が使えます。
+シェルからは `zundamon-jarvisctl toggle|pause|resume|status|watch|settings|get|set`、`zundamon-jarvis setup|doctor|uninstall` が使えます
+（`zundamon-jarvis setup --cli` で、設定をターミナルで行えます）。
 
 ## 設定
 
@@ -238,7 +246,8 @@ Windows は `%APPDATA%\zundamon-jarvis\config.toml`。
 ## Linux
 
 1 行インストーラはありません。`uv`、`claude`、PipeWire（`pactl`）、systemd ユーザーセッションを用意し、
-`~/repos/zundamon-jarvis` に clone し、上の English の [Linux](#linux) の手順（`uv sync`、`engine install`、`models download`、`setup`）で入れます。
+`~/repos/zundamon-jarvis` に clone し、上の English の [Linux](#linux) の手順（`uv sync` のあと `setup` でブラウザの設定画面。
+ターミナルで行うなら `engine install`、`models download`、`setup --cli`）で入れます。
 `zundamon-jarvis uninstall` は systemd のユニットも削除します。Omarchy/Hyprland との連携とエコーキャンセルは任意です。
 
 ## プライバシー

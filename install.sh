@@ -2,11 +2,13 @@
 # zundamon-jarvis one-line installer (Apple Silicon macOS 14+)
 #   curl -fsSL https://raw.githubusercontent.com/dyoshyy/zundamon-jarvis/main/install.sh | sh
 # 環境変数: ZJ_VERSION=v0.1.0 (版を固定) / ZJ_DRY_RUN=1 (実行せず表示だけ)
+#           ZJ_CLI=1 (設定をブラウザでなくターミナルで行う。エンジンとモデルもここで取得する)
 set -eu
 
 OWNER_REPO="dyoshyy/zundamon-jarvis"
 ZJ_VERSION="${ZJ_VERSION:-}"
 ZJ_DRY_RUN="${ZJ_DRY_RUN:-0}"
+ZJ_CLI="${ZJ_CLI:-0}"
 ZJ_TTY="${ZJ_TTY:-/dev/tty}"
 MIN_FREE_KB=$((8 * 1024 * 1024))
 CURRENT_STEP=""
@@ -138,23 +140,37 @@ main() {
     esac
   fi
 
-  # ⑥⑦ 音声エンジンとモデル（どちらも、済んでいれば何もせず戻る）
+  # ⑥ 設定。ふつうはブラウザの設定画面（声のエンジンとモデルのダウンロードも、そこで進み具合を見せながら行う）。
+  # ブラウザが開かないときは、端末に出る URL を開く。
+  if [ "$ZJ_CLI" != 1 ]; then
+    step "設定の画面を開きます（ブラウザで続けてください）"
+    if [ "$ZJ_DRY_RUN" = 1 ]; then
+      say "    [dry-run] zundamon-jarvis setup"
+    elif ! zundamon-jarvis setup </dev/null; then
+      say "==> 設定は終わっていません。ターミナルで zundamon-jarvis setup を実行すると、続きから設定できます。" >&2
+      exit 1
+    fi
+    say "==> 完了しました"
+    return 0
+  fi
+
+  # ZJ_CLI=1: これまでどおりターミナルで。エンジンとモデルを先に取得する（済んでいれば何もせず戻る）
   step "音声エンジンを入れます（数 GB あります）"
   run zundamon-jarvis engine install
 
   step "文字起こしのモデルを取得します（数 GB あります）"
   run zundamon-jarvis models download
 
-  # ⑧ 設定（対話。curl | sh では stdin がパイプなので端末を直接つなぐ）
+  # 対話。curl | sh では stdin がパイプなので端末を直接つなぐ
   step "設定を始めます"
   if [ "$ZJ_DRY_RUN" = 1 ]; then
-    say "    [dry-run] zundamon-jarvis setup < $ZJ_TTY"
+    say "    [dry-run] zundamon-jarvis setup --cli < $ZJ_TTY"
   elif (: < "$ZJ_TTY") 2>/dev/null; then
-    zundamon-jarvis setup < "$ZJ_TTY" || fail_step
+    zundamon-jarvis setup --cli < "$ZJ_TTY" || fail_step
   else
     say "    端末から入力を受け取れないので、設定は自動では始めません。"
     say "    ターミナルで次のコマンドを実行してください:"
-    say "        zundamon-jarvis setup"
+    say "        zundamon-jarvis setup --cli"
     exit 0
   fi
 

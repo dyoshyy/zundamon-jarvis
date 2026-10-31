@@ -1,4 +1,7 @@
-"""`zundamon-jarvis setup`: the first-run questions, in order.
+"""`zundamon-jarvis setup --cli`: the first-run questions, in order, in the terminal.
+
+(Plain `zundamon-jarvis setup` is the same steps as a local web page: ``zundamon_jarvis.setup_gui``.
+Both use the step helpers here, so what is saved and what is said stays the same.)
 
 1. Claude login (one short turn through ``ClaudeBrain``; no reply in 60 s -> exit 2)
 2. Microphone (open it for 1 s: on a Mac this brings up the permission dialog)
@@ -9,7 +12,8 @@
 7. Install the services and start them
 
 Every answer is written to ``config.toml`` as soon as it is given; a re-run offers the current
-values (Enter keeps them). Everything outside (input/output, Claude, the mic, VOICEVOX,
+values (Enter keeps them). The engine and the speech model are not fetched here: the installer
+does that before the terminal wizard (the web page fetches them itself). Everything outside (input/output, Claude, the mic, VOICEVOX,
 playback, services, the control socket) is a parameter so tests use fakes.
 """
 
@@ -53,11 +57,27 @@ DAEMON_MIC_NOTE = """常駐しているほう（バックグラウンドの zund
   tccutil reset Microphone
   launchctl kickstart -k gui/$UID/dev.zundamon-jarvis.daemon
 それでも音が届かないときは `zundamon-jarvis doctor | pbcopy` の結果を送ってください。"""
+WINDOWS_DAEMON_MIC_NOTE = """常駐しているほう（バックグラウンドの zundamon-jarvis）にマイクの音が届いていません。
+設定 > プライバシーとセキュリティ > マイク で「マイクへのアクセス」と
+「デスクトップ アプリにマイクへのアクセスを許可する」をオンにしてから、もう一度話しかけてください。
+それでも音が届かないときは `zundamon-jarvis doctor | clip` の結果を送ってください。"""
 DAEMON_MIC_CHECK_S = 5
+DAEMON_MIC_SYSTEMS = ("mac", "windows")  # where an app can be refused the mic: frames of zeros
+WINDOWS_MIC_NOTE = ("設定 > プライバシーとセキュリティ > マイク で「マイクへのアクセス」と"
+                    "「デスクトップ アプリにマイクへのアクセスを許可する」をオンにしてください。")
 HEADPHONES_NOTE = (
     "ヘッドホン（イヤホン）での利用をおすすめします。Mac のスピーカーから声を出すと、"
     "マイクがその声を拾ってしまうので、話している間は聞き取りを止めます（途中で割り込めません）。"
     "ヘッドホンなら、しゃべっている途中でも話しかけて止められます。")
+# Windows has no echo cancellation either; the daemon cannot tell its speakers apart from headphones.
+WINDOWS_HEADPHONES_NOTE = (
+    "ヘッドホン（イヤホン）での利用をおすすめします。Windows にはエコーキャンセルがないので、"
+    "PC のスピーカーから声を出すと、マイクがずんだもんの声を拾ってしまいます。"
+    "ヘッドホンなら、しゃべっている途中でも話しかけて止められます。")
+LINUX_HEADPHONES_NOTE = (
+    "ヘッドホン（イヤホン）での利用をおすすめします。スピーカーで使うときは、PipeWire のエコーキャンセル"
+    "（リポジトリの deploy/install-audio.sh）を入れて、マイクに「zundamon_jarvis_aec_source」を選んでください。"
+    "どちらでも、しゃべっている途中に話しかけて止められます。")
 VOICES = [("ずんだもん", "ノーマル"), ("青山龍星", "ノーマル"), ("四国めたん", "ノーマル"),
           ("春日部つむぎ", "ノーマル")]
 SAMPLE = "こんにちは。ご用件をどうぞ。"
@@ -158,6 +178,21 @@ async def measure_mic(device: str | int | None, seconds: float = MIC_SECONDS,
 
 # ---- 4. voice ----
 
+def engine_command(run: Path, sys_: str) -> list[str]:
+    """The engine started just for the voice samples. Windows' DirectML build runs on the CPU
+    unless asked for the GPU."""
+    cmd = [str(run), "--host", "127.0.0.1", "--port", "50021"]
+    return cmd + ["--use_gpu"] if sys_ == "windows" else cmd
+
+
+def _detached(sys_: str) -> dict:
+    """Popen options: no console window on Windows; its own session elsewhere (POSIX only), so
+    Ctrl-C in the terminal reaches setup, which then stops the engine itself."""
+    if sys_ == "windows":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {"start_new_session": True}
+
+
 @contextlib.asynccontextmanager
 async def open_voice_engine(say: Callable[..., None], system: str | None = None,
                        url: str = DEFAULT_URL, wait_s: float = ENGINE_WAIT_S) -> AsyncIterator[Any]:
@@ -178,12 +213,12 @@ async def open_voice_engine(say: Callable[..., None], system: str | None = None,
 
     try:
         ok = await up()
-        run = engine.run_path(system or platform.system())
+        sys_ = system or platform.system()
+        run = engine.run_path(sys_)
         if not ok and run.is_file():
             say("VOICEVOX を起動しています（少しかかります）…")
-            proc = subprocess.Popen([str(run), "--host", "127.0.0.1", "--port", "50021"],
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                    start_new_session=True)
+            proc = subprocess.Popen(engine_command(run, sys_), stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, **_detached(sys_))
             loop = asyncio.get_running_loop()
             deadline = loop.time() + wait_s
             while not (ok := await up()) and proc.poll() is None and loop.time() < deadline:
@@ -211,7 +246,9 @@ def install_and_start(system: str | None = None) -> None:
     from zundamon_jarvis import service
 
     sys_ = system or platform.system()
-    service.install_services(sys_)  # macOS: bootout + bootstrap, so a re-run restarts with the new config
+    # macOS: bootout + bootstrap, so a re-run restarts with the new config; Windows: the
+    # service module restarts the supervisor itself.
+    service.install_services(sys_)
     if sys_ == "linux":  # already-installed units are left as they are: restart to load the new config
         subprocess.run(["systemctl", "--user", "restart", "zundamon-jarvis.service"], check=True)
 
@@ -222,7 +259,7 @@ def _request(cmd: str, timeout: float = 3.0) -> dict:
     return request(cmd, timeout=timeout)
 
 
-# ---- the wizard ----
+# ---- step helpers shared with the web setup (zundamon_jarvis.setup_gui) ----
 
 def _tilde(path: Path) -> str:
     home = Path.home()
@@ -233,6 +270,148 @@ def _tilde(path: Path) -> str:
     except ValueError:
         return str(path)
 
+
+def headphones_note(sys_: str) -> str:
+    return {"mac": HEADPHONES_NOTE, "windows": WINDOWS_HEADPHONES_NOTE}.get(sys_, LINUX_HEADPHONES_NOTE)
+
+
+def mic_problem_note(sys_: str, problem: str) -> str:
+    """What to do when the mic could not be opened (``problem`` "open") or read only silence
+    ("silent"). macOS: the grant belongs to the app setup runs under (the terminal)."""
+    if sys_ == "mac":
+        return TERMINAL_MIC_NOTE
+    if sys_ == "windows":
+        return WINDOWS_MIC_NOTE
+    return ("マイクがつながっているか確かめてください。" if problem == "open"
+            else "マイクがミュートになっていないか確かめてください。")
+
+
+def read_config(path: Path) -> tuple[Config | None, str | None]:
+    """The config, or (None, what to tell the user) when ``config.toml`` cannot be parsed."""
+    try:
+        return load_config(path), None
+    except ValueError as e:  # a broken config.toml (TOMLDecodeError is a ValueError)
+        return None, (f"設定ファイル {_tilde(path)} が読めません（{e}）。"
+                      "直すか、消してから、もう一度 `zundamon-jarvis setup` を実行してください。")
+
+
+def voice_choices(styles: list[tuple[str, str, int]]) -> list[tuple[str, int]]:
+    """(label, speaker_id) of the ``VOICES`` the engine has, in ``VOICES`` order."""
+    return [(f"{n} {s}", sid) for name, style in VOICES
+            for n, s, sid in styles if (n, s) == (name, style)]
+
+
+def save_voice(speaker_id: int, cfg: Config, path: Path) -> None:
+    update_config({"speaker_id": speaker_id}, path)
+    cfg.speaker_id = speaker_id
+
+
+def resolve_folder(raw: str, cwd: Path | None = None) -> Path | None:
+    """The existing directory a typed (or dragged) path names, else None. ``~`` is expanded and a
+    relative path is taken from ``cwd`` (default: the current directory)."""
+    s = clean_path_input(raw)
+    if not s:
+        return None
+    p = Path(s).expanduser()
+    p = p if p.is_absolute() else (cwd or Path.cwd()) / p
+    return p if p.is_dir() else None
+
+
+def save_knowledge_dir(folder: Path | None, cfg: Config, path: Path) -> None:
+    """Set (stored with ``~`` so the file stays portable) or, with None, remove the folder."""
+    update_config({"knowledge_dir": None if folder is None else _tilde(folder)}, path)
+    cfg.knowledge_dir = folder
+
+
+def save_model(model: str, cfg: Config, path: Path) -> None:
+    if model not in MODELS:
+        raise ValueError(f"model must be one of {', '.join(MODELS)}: {model!r}")
+    update_config({"model": model}, path)
+    cfg.model = model
+
+
+def pause_daemon(request: Callable[..., dict]) -> bool:
+    """A re-run: keep the running daemon from answering the voice samples. True if this paused it
+    (one the user left paused, or none running, is left alone)."""
+    try:
+        if request("status", timeout=2).get("state") != "paused":
+            request("pause", timeout=2)
+            return True
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def resume_daemon(request: Callable[..., dict]) -> None:
+    with contextlib.suppress(OSError, ValueError):
+        request("resume", timeout=2)
+
+
+def start_failed_message(e: BaseException) -> str:
+    return (f"常駐の設定ができませんでした（{e}）。"
+            "インストールを最後までやり直してから、もう一度 `zundamon-jarvis setup` を実行してください。")
+
+
+START_ERRORS = (RuntimeError, OSError, subprocess.CalledProcessError)
+
+
+async def wait_for_status(request: Callable[..., dict], sleep: Callable[[float], Awaitable[None]],
+                          tries: int = STATUS_WAIT_S) -> dict | None:
+    """The freshly started daemon's status once its control socket answers (None: not in time)."""
+    for _ in range(tries):
+        try:
+            return request("status", timeout=1)
+        except (OSError, ValueError):
+            await sleep(1)
+    return None
+
+
+DaemonMic = str  # "ok" (sound arrives) | "silent" (frames, all zeros: no grant) | "unknown"
+
+
+async def probe_daemon_mic(request: Callable[..., dict], sleep: Callable[[float], Awaitable[None]],
+                           system: str = "mac") -> DaemonMic:
+    """Listen to the daemon's own mic for ``DAEMON_MIC_CHECK_S`` seconds. On macOS the daemon is
+    a different program (uv's python3.12) with its own mic grant, so the terminal's says nothing;
+    Windows can refuse desktop apps the mic as a whole."""
+    from zundamon_jarvis.doctor import mic_verdict
+
+    info = None
+    for _ in range(DAEMON_MIC_CHECK_S):
+        await sleep(1)
+        try:
+            info = request("debug", timeout=2).get("debug")
+        except (OSError, ValueError, AttributeError):
+            info = None
+        if isinstance(info, dict) and (info.get("max_abs_last_5s") or 0) > 0:
+            return "ok"
+    silent = mic_verdict(info if isinstance(info, dict) else None, system=system)
+    return "silent" if silent else "unknown"
+
+
+DAEMON_MIC_ASK = ("常駐しているほうのマイクも確かめます。"
+                  "「\"python3.12\" がマイクへのアクセスを求めています」と出たら「許可」を押して、"
+                  f"何か話しかけてください（{DAEMON_MIC_CHECK_S} 秒ほど聞きます）…")
+DAEMON_MIC_OK = "常駐しているほうにも音が届いています。"
+DAEMON_MIC_UNKNOWN = ("常駐しているほうのマイクはまだ確かめられませんでした（起動の途中かもしれません）。"
+                      "しばらくしてもメニューバーが 📴 のままなら `zundamon-jarvis doctor | pbcopy` の結果を送ってください。")
+
+
+def daemon_mic_text(sys_: str, what: str) -> str:
+    """What to say for ``what``: "ask" (before listening) or a ``probe_daemon_mic`` verdict."""
+    if sys_ != "windows":
+        return {"ask": DAEMON_MIC_ASK, "ok": DAEMON_MIC_OK, "unknown": DAEMON_MIC_UNKNOWN,
+                "silent": DAEMON_MIC_NOTE}[what]
+    return {
+        "ask": f"常駐しているほうのマイクも確かめます。何か話しかけてください（{DAEMON_MIC_CHECK_S} 秒ほど聞きます）…",
+        "ok": DAEMON_MIC_OK,
+        "unknown": ("常駐しているほうのマイクはまだ確かめられませんでした（起動の途中かもしれません）。"
+                    "しばらくしても通知領域のアイコンが使えないままなら `zundamon-jarvis doctor | clip` の結果を送ってください。"),
+        "silent": WINDOWS_DAEMON_MIC_NOTE,
+    }[what]
+
+
+# ---- the wizard ----
 
 async def _ask(con: Console, prompt: str) -> str:
     # Called on the loop thread on purpose: Ctrl-C then interrupts input() at once (a worker
@@ -259,8 +438,7 @@ async def _voice_step(con: Console, cfg: Config, path: Path, engine_cm, play) ->
                     "あとでメニューバーの Settings… から選べます。")
             return
         styles = talk_styles(speakers)
-        choices = [(f"{n} {s}", sid) for name, style in VOICES
-                   for n, s, sid in styles if (n, s) == (name, style)]
+        choices = voice_choices(styles)
         current = _voice_label(styles, cfg.speaker_id)
         while True:
             con.say(f"今の声: {current}")
@@ -279,8 +457,7 @@ async def _voice_step(con: Console, cfg: Config, path: Path, engine_cm, play) ->
             except Exception as e:
                 con.say(f"試し読みできませんでした（{e}）")
             if (await _ask(con, f"{label} にしますか？ [Y/n]: ")).lower() in YES:
-                update_config({"speaker_id": sid}, path)
-                cfg.speaker_id = sid
+                save_voice(sid, cfg, path)
                 con.say(f"声を {label} にしました。")
                 return
 
@@ -304,17 +481,14 @@ async def _knowledge_step(con: Console, cfg: Config, path: Path) -> None:
         if not ans:
             return
         if ans == "-" and cur is not None:
-            update_config({"knowledge_dir": None}, path)
-            cfg.knowledge_dir = None
+            save_knowledge_dir(None, cfg, path)
             con.say("知識フォルダを外しました。")
             return
-        p = Path(clean_path_input(ans)).expanduser()
-        p = p if p.is_absolute() else Path.cwd() / p
-        if not p.is_dir():
+        p = resolve_folder(ans)
+        if p is None:
             con.say(f"「{ans}」というフォルダが見つかりません。もう一度入れてください。")
             continue
-        update_config({"knowledge_dir": _tilde(p)}, path)
-        cfg.knowledge_dir = p
+        save_knowledge_dir(p, cfg, path)
         con.say(f"知識フォルダ: {_tilde(p)}")
         return
 
@@ -327,8 +501,7 @@ async def _model_step(con: Console, cfg: Config, path: Path) -> None:
         if model is None:
             return  # an explicit "use the CLI default" stays as it is
         if model in MODELS:
-            update_config({"model": model}, path)
-            cfg.model = model
+            save_model(model, cfg, path)
             con.say(f"モデル: {model}")
             return
         con.say(f"{' / '.join(MODELS)} のどれかを入れてください。")
@@ -343,37 +516,22 @@ async def _mic_step(con: Console, cfg: Config, sys_: str, mic_peak) -> None:
             peak = await mic_peak(cfg.mic_device)
     if peak is None:
         con.say("マイクを開けませんでした。")
-        con.say(TERMINAL_MIC_NOTE if sys_ == "mac" else "マイクがつながっているか確かめてください。")
+        con.say(mic_problem_note(sys_, "open"))
     elif peak <= 0.0:
         con.say("音が取れませんでした（ずっと無音）。")
-        con.say(TERMINAL_MIC_NOTE if sys_ == "mac" else "マイクがミュートになっていないか確かめてください。")
+        con.say(mic_problem_note(sys_, "silent"))
     else:
         con.say(f"音が取れました（いちばん大きい音: {peak:.3f}）")
 
 
-async def _daemon_mic_check(con: Console, request, sleep) -> None:
-    """macOS: the daemon is a different program (uv's python3.12) with its own mic grant."""
-    from zundamon_jarvis.doctor import mic_verdict
-
-    con.say("常駐しているほうのマイクも確かめます。"
-            "「\"python3.12\" がマイクへのアクセスを求めています」と出たら「許可」を押して、"
-            f"何か話しかけてください（{DAEMON_MIC_CHECK_S} 秒ほど聞きます）…")
+async def _daemon_mic_check(con: Console, request, sleep, sys_: str = "mac") -> None:
+    """macOS / Windows: the daemon is a different program with its own mic grant."""
+    con.say(daemon_mic_text(sys_, "ask"))
     for attempt in range(2):
-        info = None
-        for _ in range(DAEMON_MIC_CHECK_S):
-            await sleep(1)
-            try:
-                info = request("debug", timeout=2).get("debug")
-            except (OSError, ValueError, AttributeError):
-                info = None
-            if isinstance(info, dict) and (info.get("max_abs_last_5s") or 0) > 0:
-                con.say("常駐しているほうにも音が届いています。")
-                return
-        if not mic_verdict(info if isinstance(info, dict) else None):
-            con.say("常駐しているほうのマイクはまだ確かめられませんでした（起動の途中かもしれません）。"
-                    "しばらくしてもメニューバーが 📴 のままなら `zundamon-jarvis doctor | pbcopy` の結果を送ってください。")
+        verdict = await probe_daemon_mic(request, sleep, sys_)
+        con.say(daemon_mic_text(sys_, verdict))
+        if verdict != "silent":
             return
-        con.say(DAEMON_MIC_NOTE)
         if attempt or (await _ask(con, "直したら Enter でもう一度確かめます（s で飛ばす）: ")).lower() == "s":
             return
 
@@ -393,11 +551,9 @@ async def run_setup(
 ) -> int:
     path = config_path or config_mod.CONFIG_PATH
     sys_ = system or platform.system()
-    try:
-        cfg = load_config(path)
-    except ValueError as e:  # a broken config.toml (TOMLDecodeError is a ValueError)
-        con.say(f"設定ファイル {_tilde(path)} が読めません（{e}）。"
-                "直すか、消してから、もう一度 `zundamon-jarvis setup` を実行してください。")
+    cfg, problem = read_config(path)
+    if cfg is None:
+        con.say(problem)
         return 1
     engine_cm = voice_engine or (lambda say: open_voice_engine(say, sys_))
     start = start_services or (lambda: install_and_start(sys_))
@@ -409,13 +565,7 @@ async def run_setup(
         return EXIT_LOGIN
     con.say(LIMIT_NOTE if login == "limit" else "Claude: OK")
 
-    paused = False
-    try:  # a re-run: keep the running daemon from answering the voice samples
-        if request("status", timeout=2).get("state") != "paused":  # left paused by the user: leave it
-            request("pause", timeout=2)
-            paused = True
-    except (OSError, ValueError):
-        pass
+    paused = pause_daemon(request)
     started = False
     try:
         con.say("")
@@ -423,7 +573,7 @@ async def run_setup(
         await _mic_step(con, cfg, sys_, mic_peak)
 
         con.say("")
-        con.say("[3/7] " + HEADPHONES_NOTE)
+        con.say("[3/7] " + headphones_note(sys_))
 
         con.say("")
         con.say("[4/7] 声を選びます")
@@ -441,22 +591,15 @@ async def run_setup(
         con.say("[7/7] 常駐の設定をして起動します…")
         try:
             start()
-        except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
-            con.say(f"常駐の設定ができませんでした（{e}）。"
-                    "インストールを最後までやり直してから、もう一度 `zundamon-jarvis setup` を実行してください。")
+        except START_ERRORS as e:
+            con.say(start_failed_message(e))
             return 1
         started = True
-        status = None
-        for _ in range(STATUS_WAIT_S):
-            try:
-                status = request("status", timeout=1)
-                break
-            except (OSError, ValueError):
-                await sleep(1)
+        status = await wait_for_status(request, sleep)
         if status and "text" in status:
             con.say(f"起動しました（今: {status['text']}）。")
-            if sys_ == "mac":
-                await _daemon_mic_check(con, request, sleep)
+            if sys_ in DAEMON_MIC_SYSTEMS:
+                await _daemon_mic_check(con, request, sleep, sys_)
             con.say("話しかけてみてください。")
         else:
             con.say("起動中です。少し待ってからメニューバーのアイコンを見てください。")
@@ -464,14 +607,13 @@ async def run_setup(
         return 0
     finally:
         if paused and not started:
-            with contextlib.suppress(OSError, ValueError):
-                request("resume", timeout=2)
+            resume_daemon(request)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`zundamon-jarvis setup` (dispatched by zundamon_jarvis.cli)."""
+    """`zundamon-jarvis setup --cli` (dispatched by zundamon_jarvis.cli)."""
     if argv:
-        print("usage: zundamon-jarvis setup", file=sys.stderr)
+        print("usage: zundamon-jarvis setup --cli", file=sys.stderr)
         return 2
     try:
         return asyncio.run(run_setup(Console()))

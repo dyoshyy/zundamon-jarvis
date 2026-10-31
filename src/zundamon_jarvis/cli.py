@@ -4,7 +4,7 @@
 
 import sys
 
-USAGE = ("usage: zundamon-jarvis setup | zundamon-jarvis doctor | zundamon-jarvis uninstall"
+USAGE = ("usage: zundamon-jarvis setup [--cli] | zundamon-jarvis doctor | zundamon-jarvis uninstall"
          " | zundamon-jarvis daemon [--start-paused] | zundamon-jarvis voices [--no-play]"
          " | zundamon-jarvis menubar | zundamon-jarvis tray | zundamon-jarvis supervise"
          " | zundamon-jarvis service install|uninstall|status|start|stop"
@@ -79,10 +79,10 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"モデルの準備ができました: {where}")
         return 0
-    if cmd == "setup":
-        from zundamon_jarvis import setup_wizard
+    if cmd == "setup":  # the web page; --cli: the terminal questions; --demo: the page with fakes
+        from zundamon_jarvis import setup_gui
 
-        return setup_wizard.main(rest)
+        return setup_gui.main(rest)
     if cmd == "doctor":
         from zundamon_jarvis import doctor
 

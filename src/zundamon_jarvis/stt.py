@@ -157,17 +157,71 @@ def make_transcriber(system: str | None = None):
     return Transcriber()
 
 
-def download_model(system: str | None = None) -> str:
-    """Fetch the speech model into the Hugging Face cache (no GPU, nothing loaded); returns its path."""
+# What faster_whisper.utils.download_model fetches of FASTER_WHISPER_REPO (its allow_patterns):
+# fetching the same files ourselves fills the cache WhisperModel(FASTER_WHISPER_MODEL) reads.
+FASTER_WHISPER_FILES = ("config.json", "preprocessor_config.json", "model.bin", "tokenizer.json",
+                        "vocabulary.*")
+
+
+class _NullFile:
+    def write(self, _s: str) -> None:
+        pass
+
+    def flush(self) -> None:
+        pass
+
+
+def byte_progress_tqdm(report) -> type:
+    """A ``tqdm_class`` for ``snapshot_download`` that draws nothing and calls ``report`` with
+    the bytes so far. huggingface_hub (1.x and later) makes its byte bars (unit "B": bytes
+    received and bytes written, totals grown as each file starts) and a file-count bar from
+    this class and updates them from its worker threads; the furthest byte bar is reported.
+    An older hub that only counts files with it reports nothing (the page shows "in progress")."""
+    import threading
+
+    from tqdm.std import tqdm
+
+    lock = threading.Lock()
+    bars: list = []
+
+    class _Bytes(tqdm):  # type: ignore[misc, valid-type]
+        def __init__(self, *args, **kw) -> None:
+            kw.pop("name", None)
+            kw["disable"] = False
+            kw["file"] = _NullFile()
+            super().__init__(*args, **kw)
+            if self.unit == "B":
+                with lock:
+                    bars.append(self)
+
+        def update(self, n: float | None = 1) -> bool | None:
+            out = super().update(n)
+            if self.unit == "B":
+                with lock:
+                    total = max((int(b.total or 0) for b in bars), default=0)
+                    done = max((int(b.n) for b in bars), default=0)
+                report(min(done, total) if total else done, total or None)
+            return out
+
+    return _Bytes
+
+
+def download_model(system: str | None = None, *, progress=None, local_only: bool = False) -> str:
+    """Fetch the speech model into the Hugging Face cache (no GPU, nothing loaded); returns its path.
+
+    ``progress(done, total)`` gets the bytes of the whole model as they arrive (the setup page's
+    bar; total None until the sizes are known). ``local_only`` only looks in the cache: it
+    returns the path when the model is completely there and raises otherwise (the "is it there
+    already" check, no network)."""
     from zundamon_jarvis.platform import system as _system
+    from huggingface_hub import snapshot_download
 
+    kw: dict = {"local_files_only": local_only}
+    if progress is not None:
+        kw["tqdm_class"] = byte_progress_tqdm(progress)
     if (system or _system()) == "mac":
-        from huggingface_hub import snapshot_download
-
-        return snapshot_download(MLX_MODEL)
-    from faster_whisper import download_model as fw_download
-
-    return fw_download(FASTER_WHISPER_MODEL)
+        return snapshot_download(MLX_MODEL, **kw)  # what mlx_whisper loads (the whole repo)
+    return snapshot_download(FASTER_WHISPER_REPO, allow_patterns=list(FASTER_WHISPER_FILES), **kw)
 
 
 def model_cache_dir(system: str | None = None) -> Path:
