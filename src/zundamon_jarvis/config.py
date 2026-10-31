@@ -31,6 +31,7 @@ SPEED_MIN = 0.8
 SPEED_MAX = 2.0
 Duplex = Literal["auto", "full", "half"]
 DUPLEXES: tuple[str, ...] = get_args(Duplex)
+LANGUAGES = ("ja", "en")  # the display language (zundamon_jarvis.i18n); speech follows the speaker
 
 
 @dataclass
@@ -54,6 +55,9 @@ class Config:
     # built-in speakers, full otherwise (always on Linux). Auto goes by the output PortAudio
     # saw when the daemon started: after switching outputs restart it, or set "half"
     duplex: Duplex = "auto"
+    # display language of the windows, menus and setup: "ja" or "en"; None follows the OS
+    # (what ZundamonJarvis *says* follows the language you speak, not this)
+    language: str | None = None
 
 
 def valid_speed(value: Any) -> float | None:
@@ -123,6 +127,10 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     if duplex not in DUPLEXES:
         log.warning("config: duplex %r is not one of %s; using auto", duplex, "/".join(DUPLEXES))
         duplex = "auto"
+    language = data.get("language") or None
+    if language is not None and language not in LANGUAGES:
+        log.warning("config: language %r is not one of %s; following the OS", language, "/".join(LANGUAGES))
+        language = None
     return Config(
         speaker_id=data.get("speaker_id"),
         mic_device=mic,
@@ -131,6 +139,7 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
         workdir=_dir_setting(data, "workdir") or Path.home(),
         knowledge_dir=_dir_setting(data, "knowledge_dir"),
         duplex=duplex,
+        language=language,
     )
 
 
