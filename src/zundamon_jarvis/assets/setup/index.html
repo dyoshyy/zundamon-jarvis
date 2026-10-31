@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>ずんだもんジャーヴィスの設定</title>
+<title data-t="page.title">ずんだもんジャーヴィスの設定</title>
 <link rel="icon" href="/assets/icon.png">
 <link rel="stylesheet" href="/assets/setup.css">
 <script src="/assets/setup.js" defer></script>
@@ -14,12 +14,16 @@
   <header class="top">
     <img class="logo" src="/assets/icon.png" alt="" width="40" height="40">
     <div class="brand">
-      <h1>ずんだもんジャーヴィス</h1>
-      <p>はじめの設定</p>
+      <h1 data-t="brand.name">ずんだもんジャーヴィス</h1>
+      <p data-t="brand.sub">はじめの設定</p>
+    </div>
+    <div id="lang" class="lang" role="group" aria-label="表示の言語" data-t-aria-label="lang.aria" hidden>
+      <button type="button" data-lang="ja" lang="ja" aria-pressed="false">日本語</button>
+      <button type="button" data-lang="en" lang="en" aria-pressed="false">English</button>
     </div>
   </header>
 
-  <nav class="rail" aria-label="設定の手順">
+  <nav class="rail" aria-label="設定の手順" data-t-aria-label="rail.aria">
     <ol id="steps"></ol>
     <div id="dl-mini" class="dl-mini" hidden></div>
   </nav>
@@ -44,6 +48,6 @@
     </footer>
   </main>
 </div>
-<noscript><p class="noscript">この画面には JavaScript が必要です。</p></noscript>
+<noscript><p class="noscript">この画面には JavaScript が必要です。 / This page needs JavaScript.</p></noscript>
 </body>
 </html>

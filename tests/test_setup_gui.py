@@ -242,7 +242,7 @@ def test_a_failed_download_can_be_retried(make, world):
 
 
 @pytest.mark.parametrize("result, note", [
-    ("ok", None), ("limit", setup_wizard.LIMIT_NOTE), ("login", setup_gui.LOGIN_HELP)])
+    ("ok", None), ("limit", setup_wizard.t("limit_note", "ja")), ("login", setup_gui.TEXT["login_help"]["ja"])])
 def test_login_check(make, world, result, note):
     world.login = result
     s = make()
@@ -280,11 +280,11 @@ def test_mic_silence_and_failure_explain_per_os(make, world):
     wait_until(lambda: s.snapshot()["mic"]["status"] == "listening")
     clock.now += setup_gui.SILENT_AFTER_S
     mic = s.snapshot()["mic"]
-    assert mic["status"] == "silent" and mic["note"] == setup_wizard.TERMINAL_MIC_NOTE
+    assert mic["status"] == "silent" and mic["note"] == setup_wizard.t("terminal_mic_note", "ja")
     world.mic_fails = True
     s.mic_start()
     wait_until(lambda: s.snapshot()["mic"]["status"] == "error")
-    assert s.snapshot()["mic"]["note"] == setup_wizard.TERMINAL_MIC_NOTE
+    assert s.snapshot()["mic"]["note"] == setup_wizard.t("terminal_mic_note", "ja")
 
 
 def test_voice_waits_for_the_engine_then_previews_and_saves(make, world, tmp_path):
@@ -384,8 +384,8 @@ def test_start_on_mac_checks_the_daemon_mic(make, world):
     s.start_services()
     wait_until(lambda: s.start.state == "done")
     st = s.snapshot()["start"]
-    assert st["status_text"] == "Listening" and st["daemon_mic"] == "ok"
-    assert st["daemon_mic_text"] == setup_wizard.DAEMON_MIC_OK
+    assert st["status_text"] == "聞き取り中" and st["daemon_mic"] == "ok"
+    assert st["daemon_mic_text"] == setup_wizard.t("daemon_mic_ok", "ja")
     assert world.audios[0].closed and world.engine_exited == 1  # released before the daemon starts
     assert s.started
 
@@ -396,7 +396,7 @@ def test_start_daemon_mic_silent_then_fixed(make, world):
     ready(s)
     s.start_services()
     wait_until(lambda: s.start.state == "done")
-    assert s.snapshot()["start"]["daemon_mic_text"] == setup_wizard.DAEMON_MIC_NOTE
+    assert s.snapshot()["start"]["daemon_mic_text"] == setup_wizard.t("daemon_mic_note", "ja")
     world.debug["max_abs_last_5s"] = 0.02
     s.recheck_daemon_mic()
     wait_until(lambda: s.start.daemon_mic == "ok")
@@ -507,6 +507,10 @@ def test_the_token_is_traded_for_a_cookie(app):
     (req("POST", "/api/nope", body={}), 404),
     (req("GET", "/assets/../setup_gui.py"), 404),
     (req("GET", "/assets/index.html"), 404),
+    (req("GET", "/assets/strings.json", cookie=False), 403),
+    (req("POST", "/api/language", body={"language": "en"}, headers={"origin": "http://evil.example"}), 403),
+    (req("POST", "/api/language", body=b'{"language": "en"}', ctype="text/plain"), 415),
+    (req("POST", "/api/language", body={"language": "fr"}), 400),
     (req("DELETE", "/api/state"), 405),
 ])
 def test_refusals(app, request_, status):
@@ -537,7 +541,8 @@ def test_errors_come_back_as_json(app):
 
 def test_static_files(app):
     for path, ctype in (("/", "text/html"), ("/assets/setup.js", "text/javascript"),
-                        ("/assets/setup.css", "text/css"), ("/assets/icon.png", "image/png")):
+                        ("/assets/setup.css", "text/css"), ("/assets/icon.png", "image/png"),
+                        ("/assets/strings.json", "application/json")):
         r = handle(app, req("GET", path))
         assert r.status == 200 and r.content_type.startswith(ctype) and r.body
 
@@ -725,7 +730,7 @@ class FakeWindow:
         self.closed = threading.Event()
         self.urls = []
 
-    def run(self, url):
+    def run(self, url, lang=None):
         self.urls.append(url)
         if self.fail:
             raise RuntimeError("no WebView2")
@@ -825,5 +830,87 @@ def test_app_window_drives_pywebview():
     w.run("http://127.0.0.1:1/?t=x")
     assert w.pick_folder() == "/Users/me/notes"
     w.close()
-    assert calls == [("create", setup_gui.WINDOW_TITLE, "http://127.0.0.1:1/?t=x", 960, 720), "start",
+    assert calls == [("create", setup_gui.TEXT["window_title"]["ja"], "http://127.0.0.1:1/?t=x", 960, 720), "start",
                      ("dialog", "folder"), "destroy"]
+
+
+# ---- the display language ----
+
+_JAPANESE = __import__("re").compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+
+
+def _catalog():
+    return json.loads(_asset("strings.json"))
+
+
+def test_the_page_catalog_is_complete():
+    from zundamon_jarvis import i18n
+
+    assert i18n.problems(_catalog()) == []
+    assert i18n.problems(setup_gui.TEXT) == [] and i18n.problems(setup_wizard.TEXT) == []
+
+
+def test_the_page_uses_only_words_in_the_catalog():
+    import re
+
+    catalog = _catalog()
+    js, html = _asset("setup.js"), _asset("index.html")
+    used = set(re.findall(r'\btn?\("([a-z_.]+)"', js))
+    used |= set(re.findall(r'(?:label|title|bubble): "([a-z_.]+)"', js))
+    used |= set(re.findall(r'(?:install|wait): "(start\.[a-z_]+)"', js))
+    used |= set(re.findall(r'data-t(?:-aria-label)?="([a-z_.]+)"', html))
+    used = {k for k in used if not k.endswith(".")} | {f"model.{m}" for m in ("sonnet", "opus", "haiku")}
+    assert len(used) > 100 and used - set(catalog) == set()
+    assert not _JAPANESE.search(js)  # every word of the script is in the catalog
+
+
+def test_the_language_switch_saves_and_answers_in_that_language(app, tmp_path, world):
+    snap = json.loads(handle(app, req("GET", "/api/state")).body)
+    assert snap["lang"] == "ja" and snap["languages"] == ["ja", "en"]
+    r = handle(app, req("POST", "/api/language", body={"language": "en"}))
+    assert r.status == 200
+    st = json.loads(r.body)["state"]
+    assert load_config(tmp_path / "config.toml").language == "en"
+    assert st["lang"] == "en" and st["headphones"].startswith("Headphones")
+    r = handle(app, req("POST", "/api/knowledge", body={"path": "~/missing"}))
+    assert r.status == 409 and json.loads(r.body)["error"] == "There's no folder “~/missing”."
+    r = handle(app, req("POST", "/api/start", body={}))
+    assert json.loads(r.body)["error"] == "Check the Claude login first."
+    assert setup_gui.denied_page("en").decode().count("This page can't be opened") == 1
+    handle(app, req("POST", "/api/language", body={"language": "ja"}))
+    assert load_config(tmp_path / "config.toml").language == "ja"
+    assert json.loads(handle(app, req("GET", "/api/state")).body)["headphones"].startswith("ヘッドホン")
+
+
+def test_the_state_comes_in_the_configured_language(make, world):
+    world.login = "login"
+    world.mic_fails = True
+    s = make(config_text='language = "en"\n')
+    s.check_login()
+    wait_until(lambda: s.login == "login")
+    s.mic_start()
+    wait_until(lambda: s.mic.state == "error")
+    snap = s.snapshot()
+    assert snap["lang"] == "en"
+    assert snap["login"]["note"] == setup_gui.TEXT["login_help"]["en"]
+    assert snap["mic"]["note"] == setup_wizard.t("terminal_mic_note", "en")
+    assert snap["mic"]["choices"][0]["label"] == "System default mic (Built-in)"
+    assert snap["voice"]["current_label"].endswith(" ノーマル (default)")
+    s.set_language("ja")  # the default mic's label follows at once
+    assert s.snapshot()["mic"]["choices"][0]["label"] == "OS の既定のマイク（Built-in）"
+
+
+def test_start_in_english(make, world):
+    world.debug["max_abs_last_5s"] = 0.0
+    s = make(system="windows", config_text='language = "en"\n')
+    ready(s)
+    s.start_services()
+    wait_until(lambda: s.start.state == "done")
+    st = s.snapshot()["start"]
+    assert st["status_text"] == "Listening"
+    assert st["daemon_mic_text"] == setup_wizard.t("windows_daemon_mic_note", "en")
+    world.start_error = OSError("disk full")
+    s.start = setup_gui._Start()
+    s.start_services()
+    wait_until(lambda: s.start.state == "error")
+    assert s.snapshot()["start"]["message"].startswith("Couldn't set up the background service (disk full)")
