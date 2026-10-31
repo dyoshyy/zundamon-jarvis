@@ -3,6 +3,9 @@
 `menu_model` is a pure function (status dict from the control socket, or None when the daemon is
 not running -> what to draw); `run_menubar` draws it with rumps (macOS arm64 only, imported there).
 Quitting closes only the menu bar app; the daemon (LaunchAgent) keeps running.
+
+The Windows tray icon (``zundamon_jarvis.tray``) draws the same model: ``menu_model(status,
+"windows")`` only swaps the quit label and the OS-specific microphone advice.
 """
 
 import threading
@@ -20,6 +23,10 @@ DOWN_ICON = "💤"
 # The daemon is uv's python3.12 (a LaunchAgent), and that is the name macOS lists.
 MIC_NOTE = ("マイクが使えません。システム設定 > プライバシーとセキュリティ > マイク で、"
             "「python3.12」をオンにしてください")
+# Windows lists plain Win32 programs only under the "desktop apps" switch, not one by one.
+WIN_MIC_NOTE = ("マイクが使えません。設定 > プライバシーとセキュリティ > マイク で、"
+                "「デスクトップ アプリがマイクにアクセスできるようにする」をオンにしてください")
+QUIT_LABEL = {"mac": "Quit menu bar (daemon keeps running)", "windows": "Quit tray (daemon keeps running)"}
 LOGIN_NOTE = "Claude にログインしていません。ターミナルで `claude` を実行してログインしてください"
 
 
@@ -40,8 +47,8 @@ class MenuModel:
     note: str | None = None
 
 
-def menu_model(status: dict | None) -> MenuModel:
-    quit_item = MenuItem("Quit menu bar (daemon keeps running)", "quit")
+def menu_model(status: dict | None, system: str = "mac") -> MenuModel:
+    quit_item = MenuItem(QUIT_LABEL.get(system, QUIT_LABEL["mac"]), "quit")
     if status is None:
         return MenuModel(DOWN_ICON, [
             MenuItem("Not running", None, False),
@@ -53,7 +60,7 @@ def menu_model(status: dict | None) -> MenuModel:
     state, text = status.get("state", ""), status.get("text", "")
     notes = []
     if state == "offline" and "mic" in text:
-        notes.append(MIC_NOTE)
+        notes.append(WIN_MIC_NOTE if system == "windows" else MIC_NOTE)
     if status.get("login") is False:
         notes.append(LOGIN_NOTE)
     return MenuModel(TITLE_ICON.get(state, "•"), [
