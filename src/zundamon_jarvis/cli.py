@@ -1,10 +1,11 @@
 """`zundamon-jarvis daemon [--start-paused]` / `voices [--no-play]` / `menubar` (macOS) /
 `tray` / `supervise` (Windows) / `service` / `engine install` / `models download` / `setup` /
-`doctor` / `uninstall`."""
+`doctor` / `update [--check] [--yes]` / `uninstall`."""
 
 import sys
 
 USAGE = ("usage: zundamon-jarvis setup [--cli] | zundamon-jarvis doctor | zundamon-jarvis uninstall"
+         " | zundamon-jarvis update [--check] [--yes]"
          " | zundamon-jarvis daemon [--start-paused] | zundamon-jarvis voices [--no-play]"
          " | zundamon-jarvis menubar | zundamon-jarvis tray | zundamon-jarvis supervise"
          " | zundamon-jarvis service install|uninstall|status|start|stop"
@@ -87,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
         from zundamon_jarvis import doctor
 
         return doctor.main(rest)
+    if cmd == "update":
+        from zundamon_jarvis import update
+
+        return update.main(rest)
     if cmd == "uninstall":
         from zundamon_jarvis import setup_wizard
 
