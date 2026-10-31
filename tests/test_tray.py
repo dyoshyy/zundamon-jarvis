@@ -3,7 +3,7 @@ import types
 
 import pytest
 
-from zundamon_jarvis import menubar, tray
+from zundamon_jarvis import i18n, menubar, tray
 
 
 class MenuItem:
@@ -63,22 +63,28 @@ def test_badge_per_state_and_none_when_down():
 
 
 def test_tooltip():
-    assert tray.tooltip(None) == "ZundamonJarvis: not running"
-    assert tray.tooltip({"state": "listening", "text": "Listening"}) == "ZundamonJarvis: Listening"
+    assert tray.tooltip(None, "en") == "ZundamonJarvis: not running"
+    assert tray.tooltip({"state": "listening", "text": "Listening"}, "en") == "ZundamonJarvis: Listening"
     assert len(tray.tooltip({"state": "x", "text": "y" * 500})) == 127
+    assert tray.tooltip(None, "ja") == "ZundamonJarvis: 停止中"
+    assert tray.tooltip({"state": "offline", "text": "Offline (mic)", "reasons": ["mic"]}) == \
+        "ZundamonJarvis: オフライン（マイク）"
 
 
 def test_notes_are_wrapped_for_a_narrow_menu():
-    lines = tray.note_lines(menubar.WIN_MIC_NOTE + "\n" + menubar.LOGIN_NOTE)
+    mic, login = menubar.TEXT["mic.windows"]["ja"], menubar.TEXT["login"]["ja"]
+    lines = tray.note_lines(mic + "\n" + login)
     assert all(len(line) <= tray.NOTE_WIDTH for line in lines)
-    assert "".join(lines).replace(" ", "") == (menubar.WIN_MIC_NOTE + menubar.LOGIN_NOTE).replace(" ", "")
+    assert "".join(lines).replace(" ", "") == (mic + login).replace(" ", "")
+    en = menubar.TEXT["mic.windows"]["en"]
+    assert all(len(line) <= tray.NOTE_WIDTH for line in tray.note_lines(en))
     assert tray.note_lines(None) == []
 
 
 def test_menu_mirrors_the_menu_bar_and_left_click_opens_the_conversation():
     acted = []
-    menu = tray.build_menu(fake_pystray, menubar.menu_model({"state": "listening", "text": "Listening"}, "windows"),
-                           acted.append)
+    menu = tray.build_menu(fake_pystray, menubar.menu_model({"state": "listening", "text": "Listening"}, "windows",
+                                                            lang="en"), acted.append)
     assert texts(menu) == [
         ("Listening", False, False),
         ("Pause", True, False),
@@ -107,7 +113,7 @@ def test_tray_app_updates_only_what_changed_and_notifies_once():
     app = tray.TrayApp(fake_pystray, icon, lambda a: None, image=lambda s: images.append(s) or f"img:{s}")
     app.show(None)
     app.show(None)
-    assert images == [None] and icon.menu_sets == 1 and icon.title == "ZundamonJarvis: not running"
+    assert images == [None] and icon.menu_sets == 1 and icon.title == "ZundamonJarvis: 停止中"
     app.show({"state": "listening", "text": "Listening"})
     assert icon.icon == "img:listening" and icon.menu_sets == 2
     off = {"state": "offline", "text": "Offline (mic)"}
@@ -115,6 +121,18 @@ def test_tray_app_updates_only_what_changed_and_notifies_once():
     app.show(off)
     assert len(icon.notes) == 1 and "マイク" in icon.notes[0]
     assert images == [None, "listening", "offline"]
+
+
+def test_tray_app_redraws_in_a_new_language(monkeypatch):
+    icon = Icon("x")
+    app = tray.TrayApp(fake_pystray, icon, lambda a: None, image=lambda s: s)
+    status = {"state": "listening", "text": "Listening"}
+    app.show(status)
+    assert icon.title == "ZundamonJarvis: 聞き取り中" and icon.menu.items[1].text == "一時停止"
+    monkeypatch.setattr(i18n, "language", lambda config_path=None: "en")  # changed in the settings
+    app.show(status)
+    assert icon.title == "ZundamonJarvis: Listening" and icon.menu.items[1].text == "Pause"
+    assert icon.menu_sets == 2
 
 
 def test_act_on_quit_stops_and_others_run_off_thread(monkeypatch):

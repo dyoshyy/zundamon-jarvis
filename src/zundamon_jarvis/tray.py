@@ -1,7 +1,7 @@
 """Windows notification-area (tray) icon: ``zundamon-jarvis tray``, the macOS menu bar's counterpart.
 
 It draws the menu bar's pure model (``menubar.menu_model(status, "windows")``): the state, Pause /
-Resume, Conversation…, Settings…, Quit tray. pystray (Windows only, imported in ``run_tray``)
+Resume, Conversation…, Settings…, Quit tray, in the display language (read on every poll). pystray (Windows only, imported in ``run_tray``)
 shows it; the icon is ``assets/icon.png`` with a coloured dot for the state, greyed out while the
 daemon is down. A left click opens the conversation (the menu's default item), as a click on
 the Linux character does. The status is polled every 2 s on pystray's setup thread, never on
@@ -22,9 +22,9 @@ from collections.abc import Callable
 from importlib import resources
 from typing import Any
 
-from zundamon_jarvis import ctl, menubar, platform
+from zundamon_jarvis import ctl, i18n, menubar, platform
 from zundamon_jarvis import update as updater
-from zundamon_jarvis.control import request
+from zundamon_jarvis.control import request, status_label
 from zundamon_jarvis.menubar import MenuModel
 
 NAME = "ZundamonJarvis"
@@ -32,6 +32,7 @@ POLL_S = menubar.POLL_S
 ICON_SIZE = 64
 NOTE_WIDTH = 30  # characters per menu line: a Win32 menu is as wide as its longest item
 LOCK = "tray.lock"
+TEXT = {"not_running": {"ja": "停止中", "en": "not running"}}
 
 BADGE = {  # RGB of the state dot
     "listening": (46, 160, 67),
@@ -52,11 +53,12 @@ def badge_color(state: str | None) -> tuple[int, int, int] | None:
     return BADGE.get(state, BADGE["offline"])
 
 
-def tooltip(status: dict | None) -> str:
-    """The hover text (Windows keeps 127 characters of it)."""
+def tooltip(status: dict | None, lang: str | None = None) -> str:
+    """The hover text (Windows keeps 127 characters of it), in ``lang`` (default: the display
+    language)."""
     if status is None:
-        return f"{NAME}: not running"
-    return f"{NAME}: {status.get('text') or status.get('state') or '?'}"[:127]
+        return f"{NAME}: {i18n.text(TEXT, 'not_running', lang)}"
+    return f"{NAME}: {status_label(status, lang) or status.get('state') or '?'}"[:127]
 
 
 def note_lines(note: str | None, width: int = NOTE_WIDTH) -> list[str]:
@@ -120,8 +122,9 @@ class TrayApp:
         if state != self._state:
             self._icon.icon = self._image(state)
             self._state = state
-        self._icon.title = tooltip(status)  # pystray skips an unchanged title
-        model = menubar.menu_model(status, "windows", update=self.update)
+        lang = i18n.language()  # read per poll: a change in the settings window shows here
+        self._icon.title = tooltip(status, lang)  # pystray skips an unchanged title
+        model = menubar.menu_model(status, "windows", lang=lang, update=self.update)
         if model != self._model:
             self._icon.menu = build_menu(self._pystray, model, self._act)
             self._model = model

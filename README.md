@@ -17,6 +17,9 @@ Supported environments: **linux-x86_64**, **macos-arm64** and **windows-x86_64**
 - **Linux:** x86_64 with an **NVIDIA CUDA GPU** (speech-to-text and VOICEVOX run on the GPU), PipeWire, systemd user session (see [Linux](#linux)).
 - **Windows:** Windows 10 or 11, x64 (VOICEVOX uses the DirectML build). **Windows support is beta.**
 - **Japanese only:** speech recognition, the voice, and the built-in prompts are Japanese; other languages are not supported.
+  The windows, menus and setup are in Japanese or English (the OS's language unless you pick one on the
+  setup page or in the settings window; `language = "ja"|"en"` in `config.toml`). The installers follow
+  the OS too (`ZJ_LANG=ja|en` to choose).
 - [Claude Code](https://claude.com/claude-code) installed and **logged in** (run `claude` once).
 - About 8 GB of free disk (VOICEVOX engine and the speech-to-text model).
 - **Headphones are recommended.** Without echo cancellation the mic would hear Zundamon, so the ears
@@ -197,6 +200,8 @@ or the Zundamon character.
 - **Linux:** x86_64 と **NVIDIA の CUDA GPU**（文字起こしと VOICEVOX は GPU で動かします）、PipeWire、systemd のユーザーセッション（[Linux](#linux) 参照）。
 - **Windows:** Windows 10 / 11 の x64（VOICEVOX は DirectML 版を使います）。**Windows 対応はベータ版です。**
 - **日本語専用:** 音声認識・声・内蔵プロンプトはすべて日本語です。他の言語には対応していません。
+  ウィンドウ・メニュー・設定画面の表示は日本語か英語です（設定画面か設定ウィンドウで選べます。選ばなければ OS の言語。
+  `config.toml` の `language = "ja"|"en"`）。インストーラも OS の言語に従います（`ZJ_LANG=ja|en` で指定）。
 - [Claude Code](https://claude.com/claude-code) をインストールし、**ログイン済み**であること（一度 `claude` を起動）。
 - ディスクの空き 8 GB 程度（VOICEVOX エンジンと文字起こしモデル）。
 - **ヘッドホン推奨。** スピーカーだとずんだもんの声をマイクが拾うので、話している間は聞き取りを止めます（割り込めません）。

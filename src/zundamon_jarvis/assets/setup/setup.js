@@ -1,10 +1,47 @@
 // The setup page: one step at a time. Everything is saved by the setup process as soon as it is
 // chosen; this page only shows /api/state (polled) and posts what was picked. No framework, no
 // build step, no external requests. Text from the server is always set as text, never as HTML.
+// The page's own words come from /assets/strings.json in state.lang (the header's switch posts
+// /api/language; the server then answers in that language and the page redraws its step).
 "use strict";
 
 (() => {
   const $ = (id) => document.getElementById(id);
+
+  // ---- words ----
+
+  let STR = null; // the catalog: {key: {ja, en}}
+  let L = document.documentElement.lang || "ja";
+
+  function t(key, fields) {
+    const entry = STR && STR[key];
+    let s = entry ? entry[L] || entry.ja : key;
+    if (fields) s = s.replace(/\{(\w+)\}/g, (m, k) => (k in fields ? String(fields[k]) : m));
+    return s;
+  }
+
+  // The words with nodes in their {fields}: tn("login.howto", { cmd: code("claude") }).
+  function tn(key, nodes) {
+    return t(key).split(/\{(\w+)\}/).map((part, i) => (i % 2 ? nodes[part] : part));
+  }
+
+  async function loadStrings() {
+    let r;
+    try {
+      r = await fetch("/assets/strings.json", { credentials: "same-origin", cache: "no-store" });
+    } catch (e) {
+      return false; // tried again on the next poll
+    }
+    if (r.status === 403) throw new ApiError("", 403);
+    if (r.ok) {
+      try {
+        STR = await r.json();
+      } catch (e) {
+        /* tried again on the next poll */
+      }
+    }
+    return STR !== null;
+  }
 
   function el(tag, props, ...children) {
     const node = document.createElement(tag);
@@ -77,7 +114,7 @@
       });
     } catch (e) {
       setOffline(true);
-      throw new ApiError("つながりません", 0);
+      throw new ApiError(t("api.offline"), 0);
     }
     setOffline(false);
     let data = {};
@@ -120,18 +157,21 @@
   function downloadText(item, isEngine) {
     switch (item.state) {
       case "checking":
-        return "確かめています…";
+        return t("dl.checking");
       case "waiting":
-        return "順番待ち（声のエンジンのあとに取得します）";
+        return t("dl.waiting");
       case "done":
-        return "準備できています";
+        return t("dl.done");
       case "error":
-        return "取得できませんでした: " + (item.error || "");
+        return t("dl.error", { error: item.error || "" });
       case "running":
-        if (isEngine && item.stage === "extract") return "展開しています…";
-        if (isEngine && item.stage === "check") return "動くか確かめています…";
-        if (item.total) return `${gb(item.done)} / ${gb(item.total)}（${Math.floor((item.done / item.total) * 100)}%）`;
-        return item.done ? `${gb(item.done)} 取得しました` : "取得を始めています…";
+        if (isEngine && item.stage === "extract") return t("dl.extract");
+        if (isEngine && item.stage === "check") return t("dl.check");
+        if (item.total) {
+          return t("dl.progress", { done: gb(item.done), total: gb(item.total),
+            pct: Math.floor((item.done / item.total) * 100) });
+        }
+        return item.done ? t("dl.got", { done: gb(item.done) }) : t("dl.starting");
       default:
         return "";
     }
@@ -148,19 +188,16 @@
 
   const prereqStep = {
     id: "prereq",
-    label: "準備",
-    title: "声のエンジンと文字起こしのモデル",
-    bubble: "まずはボクの準備をするのだ！",
+    label: "prereq.label",
+    title: "prereq.title",
+    bubble: "prereq.bubble",
     enter(body) {
       this.rows = {};
       const items = [
-        ["engine", "声のエンジン（VOICEVOX）", "ずんだもんの声を作るソフトです。"],
-        ["model", "文字起こしのモデル（Whisper）", "話した声を文字にします。音声はこのパソコンの外に出ません。"],
+        ["engine", t("prereq.engine"), t("prereq.engine_about")],
+        ["model", t("prereq.model"), t("prereq.model_about")],
       ];
-      body.append(
-        el("p", { text: "はじめての設定では、あわせて数 GB をダウンロードします（10〜20 分ほど）。" +
-          "終わるのを待たずに次へ進めます。ダウンロードは裏で続きます。" }),
-      );
+      body.append(el("p", { text: t("prereq.intro") }));
       const list = el("div", { class: "stack" });
       for (const [key, name, about] of items) {
         const icon = el("span", { class: "icon", "aria-hidden": "true" });
@@ -170,7 +207,7 @@
           el("span", { class: "detail", text: about }), detail, b));
         this.rows[key] = { icon, detail, bar: b };
       }
-      this.retry = el("button", { class: "btn", type: "button", text: "もう一度ダウンロードする",
+      this.retry = el("button", { class: "btn", type: "button", text: t("prereq.retry"),
         onclick: () => send("/api/prereq/retry") });
       this.retryRow = el("div", { class: "row" }, this.retry);
       body.append(list, this.retryRow);
@@ -187,22 +224,23 @@
       }
       this.retryRow.hidden = !(S.prereq.engine.state === "error" || S.prereq.model.state === "error");
     },
-    next: () => [true, prereqDone() ? "" : "ダウンロード中でも先へ進めます"],
+    next: () => [true, prereqDone() ? "" : t("prereq.hint")],
   };
 
   const loginStep = {
     id: "login",
-    label: "Claude ログイン",
-    title: "Claude にログインできているか確かめます",
-    bubble: "Claude とお話しできるか見てみるのだ",
+    label: "login.label",
+    title: "login.title",
+    bubble: "login.bubble",
     enter(body) {
       if (S.login.state === "idle") send("/api/login/check");
+      this.noteKey = undefined;
       this.status = el("p", { class: "status" });
       this.bar = bar();
       this.note = el("div");
-      this.again = el("button", { class: "btn", type: "button", text: "もう一度確かめる",
+      this.again = el("button", { class: "btn", type: "button", text: t("login.again"),
         onclick: () => send("/api/login/check") });
-      body.append(el("p", { class: "muted small", text: "Claude に短い質問をひとつ送って、返事が来るかを見ます。" }),
+      body.append(el("p", { class: "muted small", text: t("login.about") }),
         this.status, this.bar, this.note, el("div", { class: "row" }, this.again));
     },
     update() {
@@ -213,9 +251,9 @@
       this.status.className = st === "ok" ? "status status-ok" : "status";
       this.status.textContent = {
         idle: "",
-        running: "確かめています…（1 分ほどかかることがあります）",
-        ok: "✅ ログインできています",
-        limit: "ログインはできています（いまは利用上限です）",
+        running: t("login.running"),
+        ok: t("login.ok"),
+        limit: t("login.limit"),
         login: "",
       }[st] || "";
       const key = st + "|" + S.login.note;
@@ -224,41 +262,39 @@
       this.note.replaceChildren();
       if (st === "login") {
         this.note.append(banner("err", el("p", { text: S.login.note }),
-          el("p", {}, "ターミナルで ", code("claude"), " と入力して Enter を押し、表示に従ってログインしてから、" +
-            "「もう一度確かめる」を押してください。")));
+          el("p", {}, ...tn("login.howto", { cmd: code("claude") }))));
       } else if (st === "limit") {
         this.note.append(banner("warn", el("p", { text: S.login.note })));
       }
     },
-    next: () => [loginOk(), loginOk() ? "" : "ログインを確かめると次へ進めます"],
+    next: () => [loginOk(), loginOk() ? "" : t("login.hint")],
   };
 
   const micStep = {
     id: "mic",
-    label: "マイク",
-    title: "マイクを選びます",
-    bubble: "マイクに向かって何か話してみるのだ！",
+    label: "mic.label",
+    title: "mic.title",
+    bubble: "mic.bubble",
     fast: true,
-    enter(body) {
+    enter(body, again) {
       this.choicesKey = null;
       this.select = el("select", { id: "mic-select", onchange: () =>
         send("/api/mic/start", { index: Number(this.select.value) }) });
-      this.meter = el("div", { class: "meter", role: "meter", "aria-label": "マイクの音の大きさ",
+      this.meter = el("div", { class: "meter", role: "meter", "aria-label": t("mic.meter"),
         "aria-valuemin": "0", "aria-valuemax": "100" }, el("i"));
       this.status = el("p", { class: "status" });
       this.note = el("div");
-      const reopen = el("button", { class: "btn btn-small", type: "button", text: "マイクを開きなおす",
+      const reopen = el("button", { class: "btn btn-small", type: "button", text: t("mic.reopen"),
         onclick: () => send("/api/mic/start") });
       body.append(
-        el("label", { class: "field", for: "mic-select" }, "使うマイク", this.select),
+        el("label", { class: "field", for: "mic-select" }, t("mic.field"), this.select),
         this.meter, this.status, this.note,
         el("div", { class: "row" }, reopen),
       );
       if (sys() === "mac") {
-        body.append(el("p", { class: "muted small", text: "はじめてのときは「“ターミナル”がマイクへのアクセスを求めています」" +
-          "と出ます。「許可」を押してください（設定はターミナルから動いているためです）。" }));
+        body.append(el("p", { class: "muted small", text: t("mic.mac_hint") }));
       }
-      send("/api/mic/start");
+      if (!again) send("/api/mic/start"); // a redraw in another language keeps the meter running
     },
     leave() {
       send("/api/mic/stop");
@@ -278,11 +314,11 @@
       this.status.className = m.status === "ok" ? "status status-ok" : "status";
       this.status.textContent = {
         idle: "",
-        opening: "マイクを開いています…",
-        listening: "聞いています。何か話してみてください…",
-        ok: `✅ 音が届いています（いちばん大きい音: ${m.peak.toFixed(3)}）`,
-        silent: "音が取れていません（ずっと無音です）",
-        error: "マイクを開けませんでした",
+        opening: t("mic.opening"),
+        listening: t("mic.listening"),
+        ok: t("mic.ok", { peak: m.peak.toFixed(3) }),
+        silent: t("mic.silent"),
+        error: t("mic.error"),
       }[m.status] || "";
       const nkey = [m.note, m.fallback_note].join("|");
       if (nkey === this.noteKey) return;
@@ -296,13 +332,12 @@
 
   const headphonesStep = {
     id: "headphones",
-    label: "ヘッドホン",
-    title: "ヘッドホンがおすすめです",
-    bubble: "ヘッドホンだと、ボクがしゃべっている途中でも止められるのだ",
+    label: "hp.label",
+    title: "hp.title",
+    bubble: "hp.bubble",
     enter(body) {
       body.append(el("p", { text: S.headphones }));
-      body.append(el("p", { class: "muted small", text: "あとから変えても大丈夫です。" +
-        "スピーカーのままでも使えます。" }));
+      body.append(el("p", { class: "muted small", text: t("hp.later") }));
     },
     update() {},
     next: () => [true, ""],
@@ -310,11 +345,11 @@
 
   const voiceStep = {
     id: "voice",
-    label: "声",
-    title: "声を選びます",
-    bubble: "好きな声を選ぶのだ。試聴はパソコンのスピーカーから鳴るのだ",
-    enter(body) {
-      send("/api/voice/open");
+    label: "voice.label",
+    title: "voice.title",
+    bubble: "voice.bubble",
+    enter(body, again) {
+      if (!again) send("/api/voice/open");
       this.cardsKey = null;
       this.status = el("div");
       this.bar = bar();
@@ -324,16 +359,16 @@
       const v = S.voice;
       this.speed = el("input", { type: "range", id: "speed", min: String(v.speed_min), max: String(v.speed_max),
         step: "0.05", value: String(v.speed) });
-      this.speedOut = el("output", { for: "speed", text: v.speed.toFixed(2) + " 倍" });
+      this.speedOut = el("output", { for: "speed", text: t("speed.value", { speed: v.speed.toFixed(2) }) });
       this.speed.addEventListener("input", () => {
-        this.speedOut.textContent = Number(this.speed.value).toFixed(2) + " 倍";
+        this.speedOut.textContent = t("speed.value", { speed: Number(this.speed.value).toFixed(2) });
       });
       this.speed.addEventListener("change", () => send("/api/speed", { speed: Number(this.speed.value) }));
       body.append(this.status, this.bar, this.current, this.cards, this.error,
-        el("label", { class: "field", for: "speed" }, "話す速さ"),
-        el("div", { class: "slider" }, el("span", { class: "small muted", text: "ゆっくり" }), this.speed,
-          el("span", { class: "small muted", text: "はやく" }), this.speedOut),
-        el("p", { class: "muted small", text: "試聴は、いま選んでいる速さで読み上げます。" }));
+        el("label", { class: "field", for: "speed" }, t("speed.field")),
+        el("div", { class: "slider" }, el("span", { class: "small muted", text: t("speed.slow") }), this.speed,
+          el("span", { class: "small muted", text: t("speed.fast") }), this.speedOut),
+        el("p", { class: "muted small", text: t("voice.speed_note") }));
     },
     update() {
       const v = S.voice;
@@ -344,16 +379,16 @@
         this.statusKey = statusKey;
         this.status.replaceChildren();
         if (v.state === "waiting") {
-          this.status.append(el("p", { text: "声のエンジンのダウンロードが終わるのを待っています…" }));
+          this.status.append(el("p", { text: t("voice.waiting") }));
         } else if (v.state === "starting") {
-          this.status.append(el("p", { text: v.message || "VOICEVOX につないでいます…" }));
+          this.status.append(el("p", { text: v.message || t("voice.connecting") }));
         } else if (v.state === "down") {
           this.status.append(banner("warn", el("p", { text: v.message }),
-            el("button", { class: "btn btn-small", type: "button", text: "もう一度つなぐ",
+            el("button", { class: "btn btn-small", type: "button", text: t("voice.reconnect"),
               onclick: () => send("/api/voice/open") })));
         }
       }
-      this.current.textContent = v.current_label ? "今の声: " + v.current_label : "";
+      this.current.textContent = v.current_label ? t("voice.current", { voice: v.current_label }) : "";
       const key = JSON.stringify([v.choices, v.current, v.previewing, v.state]);
       if (key !== this.cardsKey) {
         this.cardsKey = key;
@@ -363,15 +398,15 @@
           const playing = v.previewing === c.speaker_id;
           const card = el("div", { class: "choice" + (selected ? " selected" : ""), role: "listitem" },
             el("span", { class: "name", text: c.label }),
-            el("span", { class: "tag", text: selected ? "✓ 今の声" : "" }),
+            el("span", { class: "tag", text: selected ? t("voice.tag") : "" }),
             el("div", { class: "actions" },
               el("button", { class: "btn btn-small", type: "button", "data-key": "p" + c.speaker_id,
                 disabled: v.previewing !== null || v.state !== "ready",
-                text: playing ? "再生中…" : "▶ 試聴",
+                text: playing ? t("voice.playing") : t("voice.preview"),
                 onclick: () => send("/api/voice/preview", { speaker_id: c.speaker_id }) }),
               el("button", { class: "btn btn-small" + (selected ? "" : " btn-primary"), type: "button",
                 "data-key": "s" + c.speaker_id, disabled: selected,
-                text: selected ? "選んでいます" : "この声にする",
+                text: selected ? t("voice.chosen") : t("voice.choose"),
                 onclick: () => send("/api/voice/select", { speaker_id: c.speaker_id }) })));
           return card;
         }));
@@ -391,28 +426,28 @@
 
   const knowledgeStep = {
     id: "knowledge",
-    label: "知識フォルダ",
-    title: "知識フォルダ（なくても使えます）",
-    bubble: "メモやノートのフォルダがあれば、中身も見ながら答えるのだ",
-    enter(body) {
+    label: "k.label",
+    title: "k.title",
+    bubble: "k.bubble",
+    enter(body, again) {
       const k = S.knowledge;
-      this.input = el("input", { type: "text", id: "kdir", value: k.value || "", placeholder: "例: ~/notes",
+      const typed = again && this.input ? this.input.value : null; // not saved yet: kept on a redraw
+      this.input = el("input", { type: "text", id: "kdir", value: typed ?? (k.value || ""), placeholder: t("k.placeholder"),
         autocomplete: "off", spellcheck: "false" });
       this.input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") this.save();
       });
       this.msg = el("div");
-      const pick = k.can_pick ? el("button", { class: "btn", type: "button", text: "フォルダを選ぶ…",
+      const pick = k.can_pick ? el("button", { class: "btn", type: "button", text: t("k.pick"),
         onclick: () => this.pick() }) : null;
-      this.clear = el("button", { class: "btn btn-ghost", type: "button", text: "外す",
+      this.clear = el("button", { class: "btn btn-ghost", type: "button", text: t("k.clear"),
         onclick: () => this.save("") });
       body.append(
-        el("p", { text: "メモやノートのフォルダを指定すると、Claude がその中身を読んだり書いたりしながら答えます。" +
-          "フォルダの CLAUDE.md も読み込まれます。" }),
-        el("label", { class: "field", for: "kdir" }, "フォルダの場所"),
+        el("p", { text: t("k.about") }),
+        el("label", { class: "field", for: "kdir" }, t("k.field")),
         el("div", { class: "row" }, this.input,
-          el("button", { class: "btn", type: "button", text: "保存", onclick: () => this.save() }), pick, this.clear),
-        el("p", { class: "muted small", text: "~ はホームフォルダです。なければ空のまま「次へ」で大丈夫です。" }),
+          el("button", { class: "btn", type: "button", text: t("k.save"), onclick: () => this.save() }), pick, this.clear),
+        el("p", { class: "muted small", text: t("k.hint") }),
         this.msg,
       );
     },
@@ -421,8 +456,8 @@
       try {
         await api("/api/knowledge", { path });
         this.input.value = S.knowledge.value || "";
-        this.msg.replaceChildren(banner("ok", S.knowledge.value ? "知識フォルダ: " + S.knowledge.value
-          : "知識フォルダは使いません。"));
+        this.msg.replaceChildren(banner("ok", S.knowledge.value ? t("k.set", { path: S.knowledge.value })
+          : t("k.none")));
         return true;
       } catch (e) {
         this.msg.replaceChildren(banner("err", e.message));
@@ -430,7 +465,7 @@
       }
     },
     async pick() {
-      this.msg.replaceChildren(el("p", { class: "muted", text: "フォルダを選ぶ画面を開いています（ほかのウィンドウの後ろに出ることがあります）…" }));
+      this.msg.replaceChildren(el("p", { class: "muted", text: t("k.picking") }));
       try {
         const r = await api("/api/knowledge/pick", {});
         if (r.path) {
@@ -454,64 +489,55 @@
     next: () => [true, ""],
   };
 
-  const MODEL_ABOUT = {
-    sonnet: "バランスがよい（おすすめ）",
-    opus: "いちばんよく考えます。利用上限に早く届きます",
-    haiku: "いちばん速く答えます。かんたんな用事向け",
-  };
-
   const modelStep = {
     id: "model",
-    label: "モデル",
-    title: "Claude のモデルを選びます",
-    bubble: "考えるときに使う Claude のモデルを選ぶのだ",
+    label: "model.label",
+    title: "model.title",
+    bubble: "model.bubble",
     enter(body) {
       this.radios = {};
-      const group = el("div", { class: "choices", role: "radiogroup", "aria-label": "Claude のモデル" });
+      const group = el("div", { class: "choices", role: "radiogroup", "aria-label": t("model.group") });
       for (const m of S.model.choices) {
         const input = el("input", { type: "radio", name: "model", value: m,
           onchange: () => send("/api/model", { model: m }) });
         this.radios[m] = { input, card: null };
         const card = el("label", { class: "choice" }, input, el("span", { class: "name", text: m }),
-          el("span", { class: "small muted", text: MODEL_ABOUT[m] || "" }));
+          el("span", { class: "small muted", text: STR && STR["model." + m] ? t("model." + m) : "" }));
         this.radios[m].card = card;
         group.append(card);
       }
       this.current = el("p", { class: "muted small" });
       body.append(group, this.current,
-        el("p", { class: "muted small", text: "次の会話から使われます。あとから設定で変えられます。" }));
+        el("p", { class: "muted small", text: t("model.note") }));
     },
     update() {
       for (const [m, r] of Object.entries(this.radios)) {
         r.input.checked = S.model.current === m;
         r.card.classList.toggle("selected", S.model.current === m);
       }
-      this.current.textContent = S.model.current ? "" : "今: Claude の既定のモデル";
+      this.current.textContent = S.model.current ? "" : t("model.default_now");
     },
     next: () => [true, ""],
   };
 
-  const STAGE_TEXT = {
-    install: "常駐の設定をしています…",
-    wait: "起動を待っています（文字起こしのモデルを読み込むので、1 分ほどかかります）…",
-  };
+  const STAGE_TEXT = { install: "start.install", wait: "start.wait" };
 
   const startStep = {
     id: "start",
-    label: "起動",
-    title: "常駐の設定をして起動します",
-    bubble: "準備ができたら、ボクを起動するのだ！",
+    label: "start.label",
+    title: "start.title",
+    bubble: "start.bubble",
     enter(body) {
-      const micLabel = (S.mic.choices.find((c) => c.selected) || {}).label || "OS の既定のマイク";
+      const micLabel = (S.mic.choices.find((c) => c.selected) || {}).label || t("mic.default");
       body.append(el("dl", { class: "summary" },
-        el("dt", { text: "声" }), el("dd", { text: S.voice.current_label || "" }),
-        el("dt", { text: "話す速さ" }), el("dd", { text: S.voice.speed.toFixed(2) + " 倍" }),
-        el("dt", { text: "マイク" }), el("dd", { text: micLabel }),
-        el("dt", { text: "知識フォルダ" }), el("dd", { text: S.knowledge.value || "なし" }),
-        el("dt", { text: "モデル" }), el("dd", { text: S.model.current || "Claude の既定" }),
-        el("dt", { text: "設定ファイル" }), el("dd", {}, code(S.config_path))));
+        el("dt", { text: t("sum.voice") }), el("dd", { text: S.voice.current_label || "" }),
+        el("dt", { text: t("sum.speed") }), el("dd", { text: t("speed.value", { speed: S.voice.speed.toFixed(2) }) }),
+        el("dt", { text: t("sum.mic") }), el("dd", { text: micLabel }),
+        el("dt", { text: t("sum.knowledge") }), el("dd", { text: S.knowledge.value || t("sum.none") }),
+        el("dt", { text: t("sum.model") }), el("dd", { text: S.model.current || t("sum.model_default") }),
+        el("dt", { text: t("sum.config") }), el("dd", {}, code(S.config_path))));
       this.ready = el("div");
-      this.go = el("button", { class: "btn btn-primary", type: "button", text: "起動する",
+      this.go = el("button", { class: "btn btn-primary", type: "button", text: t("start.go"),
         onclick: () => send("/api/start") });
       this.goRow = el("div", { class: "row" }, this.go);
       this.progress = el("p");
@@ -522,8 +548,8 @@
     update() {
       const st = S.start;
       const waitingFor = [];
-      if (!prereqDone()) waitingFor.push("ダウンロード");
-      if (!loginOk()) waitingFor.push("Claude へのログイン");
+      if (!prereqDone()) waitingFor.push("downloads");
+      if (!loginOk()) waitingFor.push("login");
       const rkey = waitingFor.join() + "|" + JSON.stringify(S.prereq);
       if (rkey !== this.readyKey) {
         this.readyKey = rkey;
@@ -532,20 +558,20 @@
           const e = S.prereq.engine;
           const m = S.prereq.model;
           this.ready.append(banner("warn",
-            el("p", { text: "ダウンロードが終わると起動できます。" }),
-            el("p", { class: "small", text: "声のエンジン: " + downloadText(e, true) }),
-            el("p", { class: "small", text: "文字起こしのモデル: " + downloadText(m, false) })));
+            el("p", { text: t("start.after_downloads") }),
+            el("p", { class: "small", text: t("start.engine", { status: downloadText(e, true) }) }),
+            el("p", { class: "small", text: t("start.model", { status: downloadText(m, false) }) })));
         } else if (!loginOk()) {
-          this.ready.append(banner("err", "先に「Claude ログイン」の手順でログインを確かめてください。"));
+          this.ready.append(banner("err", t("start.login_first")));
         }
       }
       this.go.disabled = waitingFor.length > 0 || st.state === "running";
-      this.go.textContent = st.state === "error" ? "もう一度試す" : "起動する";
+      this.go.textContent = st.state === "error" ? t("start.retry") : t("start.go");
       this.goRow.hidden = st.state === "done" || st.state === "running";
       this.bar.hidden = st.state !== "running";
       setBar(this.bar, null);
       this.progress.textContent = st.state === "running"
-        ? (st.stage === "daemon_mic" ? "常駐しているほうのマイクを確かめています…" : STAGE_TEXT[st.stage] || "")
+        ? (st.stage === "daemon_mic" ? t("start.daemon_mic") : STAGE_TEXT[st.stage] ? t(STAGE_TEXT[st.stage]) : "")
         : "";
       const key = JSON.stringify([st.state, st.message, st.status_text, st.daemon_mic, st.daemon_mic_text]);
       if (key === this.resultKey) return;
@@ -556,7 +582,7 @@
         return;
       }
       if (st.status_text) {
-        this.result.append(el("p", { class: "status-ok", text: `✅ 起動しました（今: ${st.status_text}）` }));
+        this.result.append(el("p", { class: "status-ok", text: t("start.started", { status: st.status_text }) }));
       } else if (st.state === "done" && st.message) {
         this.result.append(banner("warn", st.message));
       }
@@ -564,47 +590,38 @@
         const kind = { checking: "ok", ok: "ok", silent: "warn", unknown: "warn" }[st.daemon_mic];
         const box = banner(kind, el("p", { class: "pre-line", text: st.daemon_mic_text }));
         if (st.daemon_mic === "silent" || st.daemon_mic === "unknown") {
-          box.append(el("button", { class: "btn btn-small", type: "button", text: "直したので、もう一度確かめる",
+          box.append(el("button", { class: "btn btn-small", type: "button", text: t("start.recheck"),
             onclick: () => send("/api/daemon-mic/check") }));
         }
         this.result.append(box);
       }
     },
     next: () => [S.start.state === "done" && S.start.daemon_mic !== "checking",
-      S.start.state === "done" ? "" : "起動すると次へ進めます"],
+      S.start.state === "done" ? "" : t("start.hint")],
   };
 
   function usage() {
     const s = sys();
     const parts = [];
-    if (s === "mac") {
-      parts.push(el("p", { text: "画面上のメニューバーのアイコンが状態を表します（▶ 聞いています、⏳ 考え中、🔊 話し中、⏸ 一時停止）。" +
-        "メニューから Pause / Resume、Conversation…（会話の表示）、Settings…（速さ・声・モデル・マイク）を開けます。" }));
-    } else if (s === "windows") {
-      parts.push(el("p", { text: "タスクバーの通知領域（右下）のアイコンが状態を表します。" +
-        "アイコンのメニューから、一時停止や設定を開けます。" }));
-    } else {
-      parts.push(el("p", { text: "ログインすると自動で起動します（systemd のユーザーサービス）。" +
-        "状態や操作はターミナルの zundamon-jarvisctl で見られます。" }));
-    }
+    parts.push(el("p", { text: t(s === "mac" ? "use.mac" : s === "windows" ? "use.windows" : "use.linux") }));
     parts.push(el("ul", { class: "tips" },
-      el("li", {}, code("zundamon-jarvisctl toggle"), " 一時停止と再開を切り替えます"),
-      el("li", {}, code("zundamon-jarvisctl watch"), " 聞き取った言葉と返事を流して表示します"),
-      el("li", {}, code("zundamon-jarvisctl settings"), " 速さ・声・モデル・マイクを変えます"),
-      el("li", {}, code("zundamon-jarvis setup"), " この設定をやり直します"),
-      el("li", {}, code("zundamon-jarvis doctor"), " うまくいかないときの診断です")));
+      el("li", {}, code("zundamon-jarvisctl toggle"), t("use.toggle")),
+      el("li", {}, code("zundamon-jarvisctl watch"), t("use.watch")),
+      el("li", {}, code("zundamon-jarvisctl settings"), t("use.settings")),
+      el("li", {}, code("zundamon-jarvis setup"), t("use.setup")),
+      el("li", {}, code("zundamon-jarvis doctor"), t("use.doctor"))));
     return parts;
   }
 
   const doneStep = {
     id: "done",
-    label: "完了",
-    title: "設定が終わりました",
-    bubble: "これからよろしくなのだ！話しかけてみてほしいのだ",
+    label: "done.label",
+    title: "done.title",
+    bubble: "done.bubble",
     hidden: true,
     enter(body) {
-      body.append(el("p", { text: "ふつうの声で話しかけてみてください（例: 「今日は何曜日？」）。" }), ...usage());
-      this.closeBtn = el("button", { class: "btn btn-primary", type: "button", text: "設定を閉じる",
+      body.append(el("p", { text: t("done.try") }), ...usage());
+      this.closeBtn = el("button", { class: "btn btn-primary", type: "button", text: t("done.close"),
         onclick: () => this.finish() });
       body.append(el("div", { class: "row" }, this.closeBtn));
     },
@@ -619,7 +636,10 @@
       }
       finished = true;
       clearTimeout(timer);
-      $("step-body").replaceChildren(el("p", { text: "設定を閉じました。この画面は閉じて大丈夫です。" }));
+      this.closed();
+    },
+    closed() {
+      $("step-body").replaceChildren(el("p", { text: t("done.closed") }));
       $("back").hidden = true;
       $("next").hidden = true;
       $("nav-hint").textContent = "";
@@ -647,12 +667,14 @@
 
   function renderRail() {
     const ol = $("steps");
-    if (!ol.childElementCount) {
+    if (!ol.childElementCount || ol.dataset.lang !== L) {
+      ol.replaceChildren();
+      ol.dataset.lang = L;
       STEPS.forEach((step, i) => {
         if (step.hidden) return;
         ol.append(el("li", { "data-i": String(i) },
           el("button", { type: "button", onclick: () => go(i) },
-            el("span", { class: "num", text: String(i + 1) }), el("span", { class: "label", text: step.label }))));
+            el("span", { class: "num", text: String(i + 1) }), el("span", { class: "label", text: t(step.label) }))));
       });
     }
     for (const li of ol.children) {
@@ -672,9 +694,9 @@
       const e = S.prereq.engine;
       const m = S.prereq.model;
       const item = e.state !== "done" ? e : m;
-      const label = e.state !== "done" ? "声のエンジン" : "文字起こしのモデル";
+      const key = e.state !== "done" ? "mini.engine" : "mini.model";
       if (!mini.firstChild) mini.append(el("div"), bar());
-      mini.firstChild.textContent = label + ": " + downloadText(item, item === e);
+      mini.firstChild.textContent = t(key, { status: downloadText(item, item === e) });
       setBar(mini.lastChild, downloadFraction(item, item === e));
     }
   }
@@ -686,25 +708,41 @@
     $("back").hidden = finished;
     $("next").hidden = step.id === "done" || finished;
     $("next").disabled = !ok;
-    $("next").textContent = step.id === "start" ? "完了へ" : "次へ";
+    $("next").textContent = step.id === "start" ? t("nav.finish") : t("nav.next");
     $("nav-hint").textContent = hint;
   }
 
-  function render() {
+  // again: the same step drawn again in another language (no new requests, typed text kept)
+  function render(again) {
     const step = STEPS[cur];
     errorBox = null;
-    $("step-title").textContent = step.title;
-    $("bubble").textContent = step.bubble;
+    $("step-title").textContent = t(step.title);
+    $("bubble").textContent = t(step.bubble);
     const body = $("step-body");
     body.replaceChildren();
     for (const s of STEPS) {
-      s.statusKey = s.noteKey = s.resultKey = s.readyKey = s.errorKey = undefined;
+      s.statusKey = s.noteKey = s.resultKey = s.readyKey = s.errorKey = s.choicesKey = undefined;
     }
-    step.enter(body);
+    step.enter(body, again === true);
     step.update();
     renderRail();
     updateNav();
-    document.title = `${step.label} - ずんだもんジャーヴィスの設定`;
+    document.title = t("page.step_title", { step: t(step.label) });
+  }
+
+  // The page's fixed words (index.html: data-t="key" for the text, data-t-aria-label="key").
+  function relabel() {
+    document.documentElement.lang = L;
+    for (const node of document.querySelectorAll("[data-t]")) node.textContent = t(node.dataset.t);
+    for (const node of document.querySelectorAll("[data-t-aria-label]")) {
+      node.setAttribute("aria-label", t(node.dataset.tAriaLabel));
+    }
+    $("offline").replaceChildren(...tn("offline", { cmd: code("zundamon-jarvis setup") }));
+    $("back").textContent = t("nav.back");
+    for (const b of document.querySelectorAll("#lang button")) {
+      b.setAttribute("aria-pressed", String(b.dataset.lang === L));
+    }
+    $("lang").hidden = false;
   }
 
   async function go(i) {
@@ -726,8 +764,11 @@
 
   function applyState(state) {
     const first = S === null;
+    const relang = !first && (state.lang || "ja") !== L;
     S = state;
+    L = state.lang || "ja";
     if (first) {
+      relabel();
       try {
         const saved = JSON.parse(sessionStorage.getItem("zj-setup-step") || "null");
         if (Array.isArray(saved)) [cur, reached] = saved.map((n) => Math.min(Number(n) || 0, STEPS.length - 1));
@@ -736,6 +777,12 @@
       }
       if (cur > 1 && !loginOk()) cur = 1; // a reload of a new run: the login must be checked again
       render();
+      return;
+    }
+    if (relang) {
+      relabel();
+      if (finished) doneStep.closed();
+      else render(true);
       return;
     }
     if (finished) return;
@@ -750,17 +797,23 @@
 
   async function poll() {
     try {
+      if (STR === null && !(await loadStrings())) throw new ApiError("", 0);
       await api("/api/state");
     } catch (e) {
       if (e.status === 403) {
         setOffline(false);
-        $("step-body").replaceChildren(banner("err", "この画面の期限が切れました。ターミナルに出ている URL を開きなおしてください。"));
+        $("step-body").replaceChildren(banner("err", t("expired")));
         return;
       }
     }
     if (!finished) timer = setTimeout(poll, STEPS[cur].fast ? 120 : 700);
   }
 
+  for (const b of document.querySelectorAll("#lang button")) {
+    b.addEventListener("click", () => {
+      if (b.dataset.lang !== L) send("/api/language", { language: b.dataset.lang });
+    });
+  }
   $("back").addEventListener("click", () => go(cur - 1));
   $("next").addEventListener("click", () => go(cur + 1));
   $("step-title").tabIndex = -1;

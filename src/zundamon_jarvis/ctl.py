@@ -12,6 +12,11 @@ would be shown verbatim, since the shell falls back to the raw output).
 ``watch`` streams the conversation (control socket ``watch``): recent history, then live
 lines; while the daemon is away it says so once and reconnects every 2 s, skipping what it has
 already shown (same daemon run) or showing everything again (a restarted daemon). Ctrl-C ends it.
+Its lines are in the display language (``zundamon_jarvis.i18n``), asked once per event, so a
+change in the settings window shows from the next line on; the history replayed after a
+reconnect follows it too (events carry data, not finished text: ``tool`` has ``labels`` per
+language, ``state`` its ``reasons``). The JSON the other commands print stays as the daemon
+sent it (scripts read it); ``bar``'s text and tooltip are shown, so they follow the language.
 
 ``character [state]`` runs the on-screen character overlay (``zundamon_jarvis.character_app``) under
 the system python, which has GTK; the optional state previews one animation without a daemon.
@@ -35,11 +40,42 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from zundamon_jarvis import desktop, transport
-from zundamon_jarvis.control import COMMANDS, request, socket_path
+from zundamon_jarvis import desktop, i18n, transport
+from zundamon_jarvis.control import COMMANDS, request, socket_path, status_label
 
-USAGE = ("usage: zundamon-jarvisctl toggle|pause|resume|status|debug|get|bar|watch|settings"
-         "|set speed|speaker|model|mic <value>|window [watch|settings]|character [state]")
+USAGE = ("zundamon-jarvisctl toggle|pause|resume|status|debug|get|bar|watch|settings"
+         "|set speed|speaker|model|mic|language <value>|window [watch|settings]|character [state]")
+TEXT = {
+    "usage": {"ja": "使い方: {usage}", "en": "usage: {usage}"},
+    "tooltip": {"ja": "ずんだもんジャーヴィス: {state} — クリック: 会話、右クリック: 設定、{hotkey}: 一時停止/再開",
+                "en": "ZundamonJarvis: {state} — click: conversation, right-click: settings, {hotkey}: pause/resume"},
+    "you": {"ja": "あなた ▸", "en": "You ▸"},
+    "me": {"ja": "ずんだもん ▸", "en": "ZundamonJarvis ▸"},
+    "confirm": {"ja": "❓ 確認: {text}", "en": "❓ Confirm: {text}"},
+    "confirm.yes": {"ja": "✅ はい → 実行", "en": "✅ Yes → go"},
+    "confirm.no": {"ja": "❌ いいえ → 取り消し", "en": "❌ No → cancelled"},
+    "confirm.timeout": {"ja": "⌛ 返事なし → 取り消し", "en": "⌛ No answer → cancelled"},
+    "confirm.unclear": {"ja": "❔ 聞き取れず → 取り消し", "en": "❔ Not understood → cancelled"},
+    "confirm.cancelled": {"ja": "❌ 取り消し", "en": "❌ Cancelled"},
+    "sub": {"ja": "裏: ", "en": "bg: "},
+    "task.completed": {"ja": "🧵 バックグラウンドの作業が終わりました", "en": "🧵 Background task finished"},
+    "task.failed": {"ja": "🧵 バックグラウンドの作業が失敗しました", "en": "🧵 Background task failed"},
+    "task.stopped": {"ja": "🧵 バックグラウンドの作業を止めました", "en": "🧵 Background task stopped"},
+    "task.other": {"ja": "🧵 バックグラウンドの作業: {status}", "en": "🧵 Background task: {status}"},
+    "live": {"ja": "──── ここから最新 ────", "en": "──── live from here ────"},
+    "restarted": {"ja": "──── ずんだもんジャーヴィスが再起動しました ────", "en": "──── ZundamonJarvis restarted ────"},
+    "waiting": {"ja": "⏳ ずんだもんジャーヴィスが動いていません。起動を待っています…",
+                "en": "⏳ ZundamonJarvis is not running. Waiting for it to start…"},
+    "thinking": {"ja": "ずんだもんが考え中…", "en": "ZundamonJarvis is thinking…"},
+    "unknown_window": {"ja": "知らないウィンドウです: {name!r}（{names} のどれか）",
+                       "en": "unknown window: {name!r} (use {names})"},
+    "not_found": {"ja": "zundamon-jarvisctl character: {path} がありません", "en": "zundamon-jarvisctl character: {path} not found"},
+}
+
+
+def t(key: str, lang: str | None = None, **fields: object) -> str:
+    return i18n.text(TEXT, key, lang, **fields)
+
 HOTKEY = "SUPER+ALT+J"
 ICON = {
     "listening": "\U000f036c",  # nf-md-microphone
@@ -51,13 +87,15 @@ ICON = {
 }
 
 
-def bar_output(resp: dict) -> dict:
-    state, text = resp.get("state", ""), resp.get("text", "")
+def bar_output(resp: dict, lang: str | None = None) -> dict:
+    """Waybar's JSON: the keys and ``class`` (the state, for styling) are fixed; the text and
+    tooltip are shown, so they are in the display language."""
+    lang = lang or i18n.language()
+    state, text = resp.get("state", ""), status_label(resp, lang)
     icon = ICON.get(state, "")
     return {
         "text": f"{icon} {text}".strip(),
-        "tooltip": (f"ZundamonJarvis: {text} — click: conversation, right-click: settings, "
-                    f"{HOTKEY}: pause/resume"),
+        "tooltip": t("tooltip", lang, state=text, hotkey=HOTKEY),
         "class": state,
     }
 
@@ -65,9 +103,6 @@ def bar_output(resp: dict) -> dict:
 # ---- watch ----
 
 RETRY_S = 2.0
-LIVE_LINE = "──── live from here ────"
-RESTART_LINE = "──── ZundamonJarvis restarted ────"
-WAITING_LINE = "⏳ ZundamonJarvis is not running. Waiting for it to start…"
 WINDOW_TITLE = "ZundamonJarvis"
 
 _RESET = "\033[0m"
@@ -80,13 +115,13 @@ _STYLE = {
     "no": "\033[31m",  # red
 }
 STATE_ICON = {"paused": "⏸", "listening": "▶", "limit": "⛔", "offline": "📴"}
-_CONFIRM = {
-    (True, "answer"): ("ok", "✅ Yes → go"),
-    (False, "answer"): ("no", "❌ No → cancelled"),
-    (False, "timeout"): ("no", "⌛ No answer → cancelled"),
-    (False, "unclear"): ("no", "❔ Not understood → cancelled"),
+_CONFIRM = {  # (ok, why) -> (style, TEXT key)
+    (True, "answer"): ("ok", "confirm.yes"),
+    (False, "answer"): ("no", "confirm.no"),
+    (False, "timeout"): ("no", "confirm.timeout"),
+    (False, "unclear"): ("no", "confirm.unclear"),
 }
-_TASK = {"completed": "🧵 Background task finished", "failed": "🧵 Background task failed", "stopped": "🧵 Background task stopped"}
+_TASK_STATUSES = ("completed", "failed", "stopped")
 
 
 def _hhmm(ts: Any) -> str:
@@ -96,37 +131,46 @@ def _hhmm(ts: Any) -> str:
         return "--:--"
 
 
-def _body(ev: dict) -> tuple[str, str] | None:
+def _tool_label(ev: dict, lang: str) -> str:
+    labels = ev.get("labels")
+    label = labels.get(lang) if isinstance(labels, dict) else None
+    return str(label or ev.get("label", ""))  # a daemon from before ``labels``: its English one
+
+
+def _body(ev: dict, lang: str) -> tuple[str, str] | None:
     """(style, text) for one event, or None for kinds not shown."""
     kind = ev.get("kind")
     text = str(ev.get("text", ""))
     if kind == "heard":
-        return "heard", f"You ▸\n  {text}"
+        return "heard", f"{t('you', lang)}\n  {text}"
     if kind == "said":
         what = ev.get("what")
         if what == "question":
-            return "warn", f"❓ Confirm: {text}"
+            return "warn", t("confirm", lang, text=text)
         if what == "filler":
-            return "dim", f"ZundamonJarvis ▸\n  ({text})"
-        return ("warn" if what == "notice" else "reply"), f"ZundamonJarvis ▸\n  {text}"
+            return "dim", f"{t('me', lang)}\n  ({text})"
+        return ("warn" if what == "notice" else "reply"), f"{t('me', lang)}\n  {text}"
     if kind == "confirm":
         ok = bool(ev.get("ok"))
-        return _CONFIRM.get((ok, ev.get("why")), ("ok", "✅ Yes → go") if ok else ("no", "❌ Cancelled"))
+        style, key = _CONFIRM.get((ok, ev.get("why")), ("ok", "confirm.yes") if ok else ("no", "confirm.cancelled"))
+        return style, t(key, lang)
     if kind == "tool":
-        return "dim", f"  {'bg: ' if ev.get('sub') else ''}{ev.get('label', '')}"
+        return "dim", f"  {t('sub', lang) if ev.get('sub') else ''}{_tool_label(ev, lang)}"
     if kind == "state":
         state = ev.get("state")
         style = "dim" if state == "listening" else "warn"
-        return style, f"{STATE_ICON.get(state, '•')} {text or state}"
+        label = status_label(ev, lang) if state else text
+        return style, f"{STATE_ICON.get(state, '•')} {label or state}"
     if kind == "task":
-        head = _TASK.get(ev.get("status"), f"🧵 Background task: {ev.get('status')}")
+        status = ev.get("status")
+        head = t(f"task.{status}", lang) if status in _TASK_STATUSES else t("task.other", lang, status=status)
         summary = ev.get("summary")
         return "dim", f"{head}: {summary}" if summary else head
     return None
 
 
 def speaker_of(ev: dict) -> str | None:
-    """Who is talking in this event ("You" / "ZundamonJarvis"), or None for everything else."""
+    """Who is talking in this event ("You" / "ZundamonJarvis", ids not labels), or None for everything else."""
     kind = ev.get("kind")
     if kind == "heard":
         return "You"
@@ -135,10 +179,11 @@ def speaker_of(ev: dict) -> str | None:
     return None
 
 
-def format_event(ev: dict, color: bool = False, same_speaker: bool = False) -> str | None:
-    """One event as printable text. ``same_speaker``: the previous line was the same speaker,
-    so the time and name are left out and only the indented message is printed."""
-    body = _body(ev)
+def format_event(ev: dict, color: bool = False, same_speaker: bool = False, lang: str | None = None) -> str | None:
+    """One event as printable text in ``lang`` (default the display language). ``same_speaker``:
+    the previous line was the same speaker, so the time and name are left out and only the
+    indented message is printed."""
+    body = _body(ev, lang or i18n.language())
     if body is None:
         return None
     style, text = body
@@ -150,10 +195,14 @@ def format_event(ev: dict, color: bool = False, same_speaker: bool = False) -> s
 
 
 class WatchView:
-    """Turns the stream (across reconnects) into the lines to print."""
+    """Turns the stream (across reconnects) into the lines to print. ``lang`` fixes the
+    language; None asks for the display language at each event (``self.lang`` is the last one,
+    for the spinner, which draws ten times a second)."""
 
-    def __init__(self, color: bool = False) -> None:
+    def __init__(self, color: bool = False, lang: str | None = None) -> None:
         self.color = color
+        self._fixed_lang = lang
+        self.lang = lang or i18n.language()
         self._boot: str | None = None
         self._last_id = 0
         self._live_shown = False
@@ -169,15 +218,22 @@ class WatchView:
     def _dim(self, line: str) -> str:
         return f"{_STYLE['dim']}{line}{_RESET}" if self.color else line
 
+    def _refresh_lang(self) -> str:
+        if self._fixed_lang is None:
+            self.lang = i18n.language()
+        return self.lang
+
     def feed(self, ev: dict) -> list[str]:
         kind = ev.get("kind")
+        if kind not in ("thinking", "hearing"):  # those draw no line
+            self._refresh_lang()
         if kind == "hello":
             self._waiting = False
             self._thinking = False
             boot = ev.get("boot")
             lines = []
             if self._boot is not None and boot != self._boot:
-                lines.append(self._dim(RESTART_LINE))
+                lines.append(self._dim(t("restarted", self.lang)))
                 self._last_id = 0
                 self._live_shown = False
             self._boot = boot
@@ -188,7 +244,7 @@ class WatchView:
                 return []
             self._live_shown = True
             self._speaker = None
-            return [self._dim(LIVE_LINE)]
+            return [self._dim(t("live", self.lang))]
         ev_id = ev.get("id")
         if isinstance(ev_id, int):
             if ev_id <= self._last_id:
@@ -201,7 +257,8 @@ class WatchView:
             return []
         self._thinking = False  # any other event means the turn moved on
         speaker = speaker_of(ev)
-        line = format_event(ev, self.color, same_speaker=speaker is not None and speaker == self._speaker)
+        line = format_event(ev, self.color, same_speaker=speaker is not None and speaker == self._speaker,
+                            lang=self.lang)
         if line is None:
             return []
         self._speaker = speaker
@@ -213,7 +270,7 @@ class WatchView:
         if self._waiting:
             return None
         self._waiting = True
-        return WAITING_LINE
+        return t("waiting", self._refresh_lang())
 
 
 class Loader:
@@ -235,7 +292,7 @@ class Loader:
             if self._view.busy:
                 frame = self.FRAMES[self._frame % len(self.FRAMES)]
                 self._frame += 1
-                text = f"{frame} ZundamonJarvis is thinking…"
+                text = f"{frame} {t('thinking', self._view.lang)}"
                 self._out.write(self.CLEAR + (self._view._dim(text)))
                 self._out.flush()
                 self._shown = True
@@ -354,7 +411,7 @@ def _enable_vt() -> None:
 
 def open_window(name: str) -> int:
     if name not in WINDOWS:
-        print(f"unknown window: {name!r} (use {'/'.join(WINDOWS)})", file=sys.stderr)
+        print(t("unknown_window", name=name, names="/".join(WINDOWS)), file=sys.stderr)
         return 2
     try:
         desktop.toggle_window(name, [_zundamon_jarvisctl(), *WINDOWS[name]])  # type: ignore[arg-type]
@@ -384,7 +441,7 @@ def character_command(preview: str | None = None) -> tuple[list[str], dict[str, 
 def _character(preview: str | None, execve: Callable[..., Any] = os.execve) -> int:
     cmd, extra = character_command(preview)
     if not Path(cmd[0]).exists():
-        print(f"zundamon-jarvisctl character: {cmd[0]} not found", file=sys.stderr)
+        print(t("not_found", path=cmd[0]), file=sys.stderr)
         return 1
     execve(cmd[0], cmd, {**os.environ, **extra})
     return 0  # only reached by a fake execve
@@ -408,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
     elif len(args) == 1 and args[0] in (*COMMANDS, "get", "bar"):
         cmd = args[0]
     else:
-        print(USAGE, file=sys.stderr)
+        print(t("usage", usage=USAGE), file=sys.stderr)
         return 2
     try:
         resp = request("status" if cmd == "bar" else cmd)

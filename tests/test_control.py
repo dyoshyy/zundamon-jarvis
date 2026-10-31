@@ -136,7 +136,9 @@ async def test_a_bare_liveness_probe_is_not_an_error(tmp_path, caplog):
 async def test_offline_shows_a_short_english_reason(reasons, text):
     t = Target("offline")
     t.offline_reasons = set(reasons)
-    assert await control.handle("status", t) == {"state": "offline", "text": text}
+    resp = await control.handle("status", t)
+    assert {k: resp[k] for k in ("state", "text")} == {"state": "offline", "text": text}
+    assert resp.get("reasons", []) == sorted(reasons)
 
 
 async def test_reasons_only_show_while_offline():
@@ -377,6 +379,13 @@ async def test_set_passes_key_and_value_and_adds_the_status():
     assert "error" in await control.handle("set speed 9", t, s)
 
 
+async def test_set_language_goes_to_the_settings():
+    t, s = Target(), FakeSettings()
+    await control.handle("set language en", t, s)
+    assert s.calls == [("set", "language", "en")]
+    assert "language" in (await control.handle("set language", t, s))["error"]
+
+
 @pytest.mark.parametrize("line", ["set", "set speed", "set  ", "preview", "preview 3",
                                   "preview 3 1.2", "get extra", "newsession now"])
 async def test_malformed_settings_commands_are_errors(line):
@@ -435,3 +444,13 @@ async def test_status_adds_login_false_only_when_logged_out():
     assert "login" not in await control.handle("status", t)
     t.login_ok = False
     assert await control.handle("status", t) == {"state": "listening", "text": "Listening", "login": False}
+
+
+def test_status_label_follows_the_display_language():
+    off = control.status_of("offline", {"tts", "mic"})
+    assert off == {"state": "offline", "text": "Offline (mic, voice)", "reasons": ["mic", "tts"]}
+    assert control.status_label(off, "en") == "Offline (mic, voice)"
+    assert control.status_label(off, "ja") == "オフライン（マイク・音声）"
+    assert control.status_label({"state": "listening", "text": "Listening"}, "ja") == "聞き取り中"
+    assert control.status_label({"state": "paused"}) == "一時停止中"  # the tests' display language
+    assert control.status_label({"state": "newthing", "text": "New"}, "ja") == "New"

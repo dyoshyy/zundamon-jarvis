@@ -10,6 +10,18 @@ USAGE = ("usage: zundamon-jarvis setup [--cli] | zundamon-jarvis doctor | zundam
          " | zundamon-jarvis menubar | zundamon-jarvis tray | zundamon-jarvis supervise"
          " | zundamon-jarvis service install|uninstall|status|start|stop"
          " | zundamon-jarvis engine install [--cpu] | zundamon-jarvis models download")
+TEXT = {  # zundamon_jarvis.i18n: the display language
+    "model_fetching": {"ja": "文字起こしのモデルを取得しています（初回は数 GB あり、時間がかかります）…",
+                       "en": "Downloading the speech-to-text model (several GB the first time; this takes a while)…"},
+    "model_failed": {"ja": "モデルを取得できませんでした: {error}", "en": "Couldn't download the model: {error}"},
+    "model_ready": {"ja": "モデルの準備ができました: {path}", "en": "The model is ready: {path}"},
+}
+
+
+def _t(key: str, **fields: object) -> str:
+    from zundamon_jarvis import i18n
+
+    return i18n.text(TEXT, key, **fields)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -72,13 +84,13 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "models" and rest == ["download"]:
         from zundamon_jarvis import stt
 
-        print("文字起こしのモデルを取得しています（初回は数 GB あり、時間がかかります）…", flush=True)
+        print(_t("model_fetching"), flush=True)
         try:
             where = stt.download_model()
         except Exception as e:  # network, disk: say what happened, the installer stops here
-            print(f"モデルを取得できませんでした: {e}", file=sys.stderr)
+            print(_t("model_failed", error=e), file=sys.stderr)
             return 1
-        print(f"モデルの準備ができました: {where}")
+        print(_t("model_ready", path=where))
         return 0
     if cmd == "setup":  # the web page; --cli: the terminal questions; --demo: the page with fakes
         from zundamon_jarvis import setup_gui

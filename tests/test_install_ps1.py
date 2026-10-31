@@ -107,14 +107,29 @@ def test_setup_is_the_last_step_and_downloads_are_left_to_it():
 
 
 def test_failures_name_the_step_and_say_rerun():
-    assert "失敗しました: $($state.Step)" in TEXT
+    assert "(T '失敗しました' 'Failed') + \": $($state.Step)\"" in TEXT
     assert "もう一度実行すれば、続きから進みます" in TEXT
+    assert "run the same command again" in TEXT
+
+
+STEPS = re.findall(r"Step \(T '([^']*)' '([^']*)'\)", TEXT)
 
 
 def test_messages_are_japanese_like_install_sh():
-    steps = re.findall(r"Step '([^']*)'", TEXT)
-    assert steps[0] == "環境を確認しています"
-    assert "zundamon-jarvis を入れます" in steps and "uv を確認しています" in steps
+    ja = [j for j, _ in STEPS]
+    assert ja[0] == "環境を確認しています"
+    assert "zundamon-jarvis を入れます" in ja and "uv を確認しています" in ja
+
+
+def test_messages_are_english_unless_windows_is_japanese():
+    assert "(Get-UICulture).Name -like 'ja*'" in TEXT and "$env:ZJ_LANG" in TEXT
+    en = [e for _, e in STEPS]
+    assert en[0] == "Checking your system" and "Installing zundamon-jarvis" in en
+    assert len(STEPS) == len(re.findall(r"\bStep \(", TEXT))  # every step comes in both
+    # every message with Japanese in it goes through T (outside the comments)
+    for line in TEXT.splitlines():
+        if re.search(r"[\u3040-\u30ff]", line) and not line.lstrip().startswith("#"):
+            assert "(T " in line, line
 
 
 # ---- with PowerShell ----
@@ -135,7 +150,16 @@ def test_parses_cleanly():
 @pytest.mark.skipif(sys.platform == "win32", reason="checks the refusal on a non-Windows host")
 def test_refuses_outside_windows_and_runs_nothing(tmp_path):
     r = subprocess.run([PWSH, "-NoProfile", "-File", str(SCRIPT)], capture_output=True, text=True, timeout=60,
-                       env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "ZJ_DRY_RUN": "1"})
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "ZJ_DRY_RUN": "1", "ZJ_LANG": "ja"})
     assert r.returncode == 1
     assert "Windows 用" in r.stdout + r.stderr
     assert "==> zundamon-jarvis を入れます" not in r.stdout
+
+
+@needs_pwsh
+@pytest.mark.skipif(sys.platform == "win32", reason="checks the refusal on a non-Windows host")
+def test_refuses_in_english_outside_a_japanese_ui(tmp_path):
+    r = subprocess.run([PWSH, "-NoProfile", "-File", str(SCRIPT)], capture_output=True, text=True, timeout=60,
+                       env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "ZJ_DRY_RUN": "1", "ZJ_LANG": "en"})
+    assert r.returncode == 1
+    assert "This installer is for Windows" in r.stdout + r.stderr

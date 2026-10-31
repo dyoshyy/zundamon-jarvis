@@ -28,6 +28,12 @@ for an HttpOnly SameSite=Strict cookie that every other request must carry; a ``
 ``127.0.0.1:<port>`` / ``localhost:<port>`` is refused (DNS rebinding), as is a foreign
 ``Origin``; a POST must be ``application/json`` (a cross-site form cannot send that without a
 CORS preflight, which is never answered) and the page's CSP allows only its own files.
+
+Language: the page shows ``state.lang`` ("ja" | "en"; config.toml's ``language``, else the OS's).
+Its own words come from ``assets/setup/strings.json`` (``{key: {"ja", "en"}}``, loaded once);
+the words the server makes (notes, refusals, the finish lines in the terminal) come in the
+session's language. The header's switch posts ``/api/language``, which saves ``language`` at
+once and answers with the state in the new language; the page then redraws the step it is on.
 """
 
 import asyncio
@@ -51,9 +57,10 @@ from pathlib import Path
 from typing import Any
 
 from zundamon_jarvis import config as config_mod
-from zundamon_jarvis import platform
+from zundamon_jarvis import i18n, platform
 from zundamon_jarvis import setup_wizard as wiz
-from zundamon_jarvis.config import MODELS, SPEED_MAX, SPEED_MIN, Config, update_config, valid_speed
+from zundamon_jarvis.config import LANGUAGES, MODELS, SPEED_MAX, SPEED_MIN, Config, update_config, valid_speed
+from zundamon_jarvis.control import status_label
 from zundamon_jarvis.tts import talk_styles
 
 log = logging.getLogger(__name__)
@@ -66,10 +73,46 @@ SILENT_AFTER_S = 3.0  # the meter read nothing but zeros this long: say so
 MAX_BODY = 64 * 1024
 PICK_TIMEOUT_S = 600.0
 
-LOGIN_HELP = "Claude にログインできていません（Claude Code が入っていないときも、こうなります）。"
-DEFAULT_MIC_LABEL = "OS の既定のマイク"
-MIC_FALLBACK_NOTE = "選んだマイクが見つからないので、OS の既定のマイクの音を表示しています。"
-START_PENDING = "起動中です。少し待ってから、メニューバー（Windows は通知領域）のアイコンを見てください。"
+# What the server says (the page's own words are in assets/setup/strings.json).
+TEXT = {
+    "login_help": {"ja": "Claude にログインできていません（Claude Code が入っていないときも、こうなります）。",
+                   "en": "You're not signed in to Claude (this also happens when Claude Code isn't installed)."},
+    "default_mic": {"ja": "OS の既定のマイク", "en": "System default mic"},
+    "default_mic_named": {"ja": "OS の既定のマイク（{name}）", "en": "System default mic ({name})"},
+    "mic_fallback": {"ja": "選んだマイクが見つからないので、OS の既定のマイクの音を表示しています。",
+                     "en": "The mic you chose isn't there, so this shows the system default mic."},
+    "start_pending": {"ja": "起動中です。少し待ってから、メニューバー（Windows は通知領域）のアイコンを見てください。",
+                      "en": "Starting up. Give it a moment, then check the icon in the menu bar "
+                            "(the notification area on Windows)."},
+    "voice_down": {"ja": "VOICEVOX につながらないので、試聴できません。声はあとで設定（メニューの「設定…」）からも選べます。",
+                   "en": "Can't reach VOICEVOX, so there are no samples. "
+                         "You can also choose a voice later in Settings…."},
+    "voice_not_ready": {"ja": "声のエンジンの準備ができていません。", "en": "The voice engine isn't ready yet."},
+    "previewing": {"ja": "いま試聴しています。", "en": "A sample is already playing."},
+    "voicevox_closed": {"ja": "VOICEVOX が閉じています", "en": "VOICEVOX is closed"},
+    "folder_not_found": {"ja": "「{path}」というフォルダが見つかりません。", "en": "There's no folder “{path}”."},
+    "no_picker": {"ja": "このパソコンではフォルダを選ぶ画面を出せません。場所を入力してください。",
+                  "en": "Can't show a folder picker on this computer. Type the path instead."},
+    "picker_title": {"ja": "知識フォルダを選ぶ", "en": "Choose a knowledge folder"},
+    "login_first": {"ja": "先に Claude へのログインを確かめてください。", "en": "Check the Claude login first."},
+    "downloads_first": {"ja": "声のエンジンと文字起こしのモデルの準備が終わってから起動できます。",
+                        "en": "You can start once the voice engine and the speech model are ready."},
+    "cannot_check": {"ja": "いまは確かめられません。", "en": "Can't check right now."},
+    "denied": {"ja": "このページは開けません。ターミナルに出ている URL をそのまま開いてください。",
+               "en": "This page can't be opened. Open the exact URL shown in the terminal."},
+    "window_title": {"ja": "ずんだもんジャーヴィスの設定", "en": "ZundamonJarvis Setup"},
+    "browser_open": {"ja": "設定の画面をブラウザで開きます。開かないときは、次の URL をブラウザに貼り付けてください:",
+                     "en": "Opening setup in your browser. If it doesn't open, paste this URL into a browser:"},
+    "browser_cli": {"ja": "（ブラウザが使えないときは Ctrl-C で止めて `zundamon-jarvis setup --cli` を実行してください）",
+                    "en": "(No browser? Press Ctrl-C and run `zundamon-jarvis setup --cli` instead.)"},
+    "browser_failed": {"ja": "ブラウザを開けませんでした。上の URL を開いてください。",
+                       "en": "Couldn't open a browser. Open the URL above."},
+    "window_open": {"ja": "設定の画面を開きます（閉じると設定を終えます）。",
+                    "en": "Opening the setup window (closing it ends setup)."},
+    "finished": {"ja": "設定が終わりました。設定ファイル: {path}", "en": "Setup is done. Settings file: {path}"},
+    "unfinished": {"ja": "設定は途中です。もう一度 `zundamon-jarvis setup` を実行すると、続きから設定できます。",
+                   "en": "Setup isn't finished. Run `zundamon-jarvis setup` again to pick up where you left off."},
+}
 
 
 # ---- outside dependencies ----
@@ -125,7 +168,7 @@ def tk_folder_picker() -> Callable[[], str | None] | None:
 
     def pick() -> str | None:
         try:
-            r = subprocess.run([sys.executable, "-c", PICK_SCRIPT, "知識フォルダを選ぶ"],
+            r = subprocess.run([sys.executable, "-c", PICK_SCRIPT, i18n.text(TEXT, "picker_title")],
                                capture_output=True, text=True, timeout=PICK_TIMEOUT_S)
         except (OSError, subprocess.SubprocessError):
             log.debug("folder dialog failed", exc_info=True)
@@ -177,7 +220,8 @@ class _Download:
 
 @dataclass
 class _Mic:
-    choices: list = field(default_factory=list)  # [(device, label)]
+    # [(device, label)]; the OS default's (None, name it resolves to) is labelled when shown
+    choices: list = field(default_factory=list)
     state: str = "idle"  # idle | opening | listening | error
     level: float = 0.0
     peak: float = 0.0
@@ -199,8 +243,9 @@ class _Voice:
 class _Start:
     state: str = "idle"  # idle | running | done | error
     stage: str | None = None  # install | wait | daemon_mic
-    message: str | None = None
-    status_text: str | None = None
+    error: BaseException | None = None  # starting failed (state "error")
+    pending: bool = False  # started, but the daemon did not answer in time
+    status: dict | None = None  # the daemon's first status
     daemon_mic: str | None = None  # checking | ok | silent | unknown
 
 
@@ -211,6 +256,7 @@ class SetupSession:
         self.cfg = cfg
         self.path = config_path
         self.sys = system
+        self.lang = cfg.language or i18n.language()  # the page's display language
         self._clock = clock
         self._lock = threading.RLock()
         # config.toml is read, changed and replaced: two answers saved at once must not race
@@ -233,6 +279,18 @@ class SetupSession:
         self.started = False
         self.finished = threading.Event()
         self.closed = False
+
+    def t(self, key: str, **fields: object) -> str:
+        return i18n.text(TEXT, key, self.lang, **fields)
+
+    def set_language(self, lang: Any) -> None:
+        if lang not in LANGUAGES:
+            raise ValueError(f"language must be one of {', '.join(LANGUAGES)}")
+        with self._cfg_lock:
+            update_config({"language": lang}, self.path)
+            self.cfg.language = lang
+        with self._lock:
+            self.lang = lang
 
     # -- lifecycle --
 
@@ -404,12 +462,16 @@ class SetupSession:
         except Exception:
             default = None
         out = []
-        for device, label in mic_choices(sources, self.cfg.mic_device):
-            if device is None:
-                resolved = next((s.label for s in sources if s.name == default), default)
-                label = DEFAULT_MIC_LABEL + (f"（{resolved}）" if resolved else "")
+        for device, label in mic_choices(sources, self.cfg.mic_device, self.lang):
+            if device is None:  # labelled when shown, in the page's language then
+                label = next((s.label for s in sources if s.name == default), default)
             out.append((device, label))
         return out
+
+    def _mic_label(self, device: str | int | None, label: str | None) -> str:
+        if device is not None:
+            return str(label)
+        return self.t("default_mic_named", name=label) if label else self.t("default_mic")
 
     async def _meter(self, device: str | int | None) -> None:
         import numpy as np
@@ -448,14 +510,14 @@ class SetupSession:
                 "silent" if self._clock() - m.opened_at >= SILENT_AFTER_S else "listening")
         note = None
         if status == "error":
-            note = wiz.mic_problem_note(self.sys, "open")
+            note = wiz.mic_problem_note(self.sys, "open", self.lang)
         elif status == "silent":
-            note = wiz.mic_problem_note(self.sys, "silent")
+            note = wiz.mic_problem_note(self.sys, "silent", self.lang)
         return {
-            "choices": [{"label": label, "selected": device == self.cfg.mic_device}
+            "choices": [{"label": self._mic_label(device, label), "selected": device == self.cfg.mic_device}
                         for device, label in m.choices],
             "status": status, "level": round(m.level, 4), "peak": round(m.peak, 4), "note": note,
-            "fallback_note": MIC_FALLBACK_NOTE if m.fallback else None,
+            "fallback_note": self.t("mic_fallback") if m.fallback else None,
         }
 
     # -- 4. voice --
@@ -498,8 +560,7 @@ class SetupSession:
             await stack.aclose()
             with self._lock:
                 self.voice.state = "down"
-                self.voice.message = ("VOICEVOX につながらないので、試聴できません。"
-                                      "声はあとで設定（Settings…）からも選べます。")
+                self.voice.message = None  # the snapshot says why, in the page's language
             return
         styles = talk_styles(speakers)
         self._voice_vv, self._voice_stack = vv, stack
@@ -524,9 +585,9 @@ class SetupSession:
     def voice_preview(self, speaker_id: int) -> None:
         with self._lock:
             if self.voice.state != "ready":
-                raise Refused("声のエンジンの準備ができていません。")
+                raise Refused(self.t("voice_not_ready"))
             if self.voice.previewing is not None:
-                raise Refused("いま試聴しています。")
+                raise Refused(self.t("previewing"))
             if speaker_id not in [sid for _, sid in self.voice.choices]:
                 raise ValueError("no such voice")
             self.voice.previewing, self.voice.error = speaker_id, None
@@ -536,12 +597,12 @@ class SetupSession:
         try:
             vv = self._voice_vv
             if vv is None:
-                raise RuntimeError("VOICEVOX が閉じています")
+                raise RuntimeError(self.t("voicevox_closed"))
             await self.deps.play(await vv.synth(wiz.SAMPLE, speaker_id, speed=self.cfg.speed))
         except Exception as e:
             log.debug("preview failed", exc_info=True)
             with self._lock:
-                self.voice.error = f"試し読みできませんでした（{e}）"
+                self.voice.error = wiz.t("preview_failed", self.lang, error=e)
         finally:
             with self._lock:
                 self.voice.previewing = None
@@ -565,9 +626,10 @@ class SetupSession:
     def _voice_view(self) -> dict:
         v = self.voice
         sid = self.cfg.speaker_id
-        current = wiz._voice_label(v.styles, sid)
+        current = wiz._voice_label(v.styles, sid, self.lang)
+        message = self.t("voice_down") if v.state == "down" else v.message
         return {
-            "state": v.state, "message": v.message, "error": v.error, "previewing": v.previewing,
+            "state": v.state, "message": message, "error": v.error, "previewing": v.previewing,
             "choices": [{"label": label, "speaker_id": s} for label, s in v.choices],
             "current": sid, "current_label": current,
             "speed": self.cfg.speed, "speed_min": SPEED_MIN, "speed_max": SPEED_MAX,
@@ -584,13 +646,13 @@ class SetupSession:
             raise ValueError("path must be a string")
         folder = wiz.resolve_folder(raw, Path.home())
         if folder is None:
-            raise Refused(f"「{raw.strip()}」というフォルダが見つかりません。")
+            raise Refused(self.t("folder_not_found", path=raw.strip()))
         with self._cfg_lock:
             wiz.save_knowledge_dir(folder, self.cfg, self.path)
 
     def pick_folder(self) -> str | None:
         if self.deps.pick_folder is None:
-            raise Refused("このパソコンではフォルダを選ぶ画面を出せません。場所を入力してください。")
+            raise Refused(self.t("no_picker"))
         return self.deps.pick_folder()
 
     # -- 6. model --
@@ -606,9 +668,9 @@ class SetupSession:
     def start_services(self) -> None:
         with self._lock:
             if self.login not in ("ok", "limit"):
-                raise Refused("先に Claude へのログインを確かめてください。")
+                raise Refused(self.t("login_first"))
             if self.engine.state != "done" or self.model.state != "done":
-                raise Refused("声のエンジンと文字起こしのモデルの準備が終わってから起動できます。")
+                raise Refused(self.t("downloads_first"))
             if self.start.state == "running":
                 return
             self.start = _Start(state="running", stage="install")
@@ -621,7 +683,7 @@ class SetupSession:
         except Exception as e:  # the CLI's START_ERRORS and anything else: say it on the page
             log.warning("starting the services failed", exc_info=True)
             with self._lock:
-                self.start.state, self.start.message = "error", wiz.start_failed_message(e)
+                self.start.state, self.start.error = "error", e
             return
         self.started = True
         with self._lock:
@@ -629,10 +691,10 @@ class SetupSession:
         status = await wiz.wait_for_status(self.deps.request, self.deps.sleep)
         if not (status and "text" in status):
             with self._lock:
-                self.start.state, self.start.stage, self.start.message = "done", None, START_PENDING
+                self.start.state, self.start.stage, self.start.pending = "done", None, True
             return
         with self._lock:
-            self.start.status_text = str(status["text"])
+            self.start.status = dict(status)
         if self.sys in wiz.DAEMON_MIC_SYSTEMS:
             await self._daemon_mic()
         with self._lock:
@@ -649,7 +711,7 @@ class SetupSession:
         with self._lock:
             if (not self.started or self.sys not in wiz.DAEMON_MIC_SYSTEMS
                     or self.start.daemon_mic == "checking"):
-                raise Refused("いまは確かめられません。")
+                raise Refused(self.t("cannot_check"))
             self.start.daemon_mic = "checking"
         self._spawn(self._daemon_mic())
 
@@ -662,28 +724,39 @@ class SetupSession:
     def _download_view(self, d: _Download) -> dict:
         return {"state": d.state, "stage": d.stage, "done": d.done, "total": d.total, "error": d.error}
 
+    def _start_message(self) -> str | None:
+        st = self.start
+        if st.state == "error" and st.error is not None:
+            return wiz.start_failed_message(st.error, self.lang)
+        return self.t("start_pending") if st.pending else None
+
     def snapshot(self) -> dict:
         with self._lock:
             daemon_mic = self.start.daemon_mic
+            lang = self.lang
             return {
+                "lang": lang,
+                "languages": list(LANGUAGES),
                 "system": self.sys,
                 "config_path": wiz._tilde(self.path),
                 "prereq": {"engine": self._download_view(self.engine),
                            "model": self._download_view(self.model)},
                 "login": {"state": self.login,
-                          "note": {"login": LOGIN_HELP, "limit": wiz.LIMIT_NOTE}.get(self.login)},
+                          "note": (self.t("login_help") if self.login == "login" else
+                                   wiz.t("limit_note", lang) if self.login == "limit" else None)},
                 "mic": self._mic_view(),
-                "headphones": wiz.headphones_note(self.sys),
+                "headphones": wiz.headphones_note(self.sys, lang),
                 "voice": self._voice_view(),
                 "knowledge": {"value": wiz._tilde(self.cfg.knowledge_dir) if self.cfg.knowledge_dir
                               else None, "can_pick": self.deps.pick_folder is not None},
                 "model": {"choices": list(MODELS), "current": self.cfg.model},
                 "start": {
                     "state": self.start.state, "stage": self.start.stage,
-                    "message": self.start.message, "status_text": self.start.status_text,
+                    "message": self._start_message(),
+                    "status_text": status_label(self.start.status, lang) if self.start.status else None,
                     "daemon_mic": daemon_mic,
                     "daemon_mic_text": (wiz.daemon_mic_text(
-                        self.sys, "ask" if daemon_mic == "checking" else daemon_mic)
+                        self.sys, "ask" if daemon_mic == "checking" else daemon_mic, lang)
                         if daemon_mic else None),
                 },
                 "finished": self.finished.is_set(),
@@ -713,10 +786,14 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self';
 STATIC = {  # published name -> (package-relative path, content type)
     "setup.css": (("assets", "setup", "setup.css"), "text/css; charset=utf-8"),
     "setup.js": (("assets", "setup", "setup.js"), "text/javascript; charset=utf-8"),
+    "strings.json": (("assets", "setup", "strings.json"), "application/json; charset=utf-8"),
     "icon.png": (("assets", "icon.png"), "image/png"),
 }
-DENIED_PAGE = ("<!doctype html><meta charset=utf-8><title>zundamon-jarvis</title>"
-               "<p>このページは開けません。ターミナルに出ている URL をそのまま開いてください。</p>")
+
+
+def denied_page(lang: str) -> bytes:
+    return (f"<!doctype html><html lang={lang}><meta charset=utf-8><title>zundamon-jarvis</title>"
+            f"<p>{i18n.text(TEXT, 'denied', lang)}</p>").encode()
 
 
 def _asset(*parts: str) -> bytes:
@@ -783,14 +860,14 @@ def handle(app: App, req: Request) -> Response:
         token = urllib.parse.parse_qs(url.query).get("t", [""])[0]
         if token:
             if not hmac.compare_digest(token.encode(), app.token.encode()):
-                return Response(403, DENIED_PAGE.encode(), "text/html; charset=utf-8")
+                return Response(403, denied_page(s.lang), "text/html; charset=utf-8")
             # Trade the token for a cookie and drop it from the address bar.
             return Response(303, headers=[
                 ("Location", "/"),
                 ("Set-Cookie", f"{app.cookie_name()}={app.token}; Path=/; HttpOnly; SameSite=Strict")])
     if not _authorized(app, req.headers):
         if path == "/":
-            return Response(403, DENIED_PAGE.encode(), "text/html; charset=utf-8")
+            return Response(403, denied_page(s.lang), "text/html; charset=utf-8")
         return _error(403, "forbidden")
     app.last_seen = app.clock()
     if req.method == "GET":
@@ -867,6 +944,7 @@ ROUTES: dict[str, Callable[[App, dict], dict | None]] = {
     "/api/model": lambda app, d: app.session.set_model(d.get("model")),
     "/api/start": lambda app, d: app.session.start_services(),
     "/api/daemon-mic/check": lambda app, d: app.session.recheck_daemon_mic(),
+    "/api/language": lambda app, d: app.session.set_language(d.get("language")),
     "/api/bye": _bye,
     "/api/finish": _finish,
 }
@@ -984,7 +1062,6 @@ def _open_browser(sys_: str, environ: dict | None = None) -> Callable[[str], boo
 
 # ---- the app window (macOS, Windows) ----
 
-WINDOW_TITLE = "ずんだもんジャーヴィスの設定"
 WINDOW_SIZE = (960, 720)
 WINDOW_MIN = (420, 560)
 
@@ -996,10 +1073,11 @@ class AppWindow:
         self._wv = webview
         self._win: Any = None
 
-    def run(self, url: str) -> None:
+    def run(self, url: str, lang: str | None = None) -> None:
         """Show ``url`` and block (on the main thread: Cocoa needs it) until the window is closed."""
         w, h = WINDOW_SIZE
-        self._win = self._wv.create_window(WINDOW_TITLE, url, width=w, height=h, min_size=WINDOW_MIN,
+        title = i18n.text(TEXT, "window_title", lang)
+        self._win = self._wv.create_window(title, url, width=w, height=h, min_size=WINDOW_MIN,
                                            background_color="#121712")
         self._wv.start()
 
@@ -1065,28 +1143,28 @@ def run_gui(deps: Deps | None = None, *, config_path: Path | None = None, system
         else:
             if window is not None:
                 deps.pick_folder = tk_folder_picker()  # the window's own dialog is gone with it
-            out("設定の画面をブラウザで開きます。開かないときは、次の URL をブラウザに貼り付けてください:")
+            out(session.t("browser_open"))
             out(f"  {app.url()}")
-            out("（ブラウザが使えないときは Ctrl-C で止めて `zundamon-jarvis setup --cli` を実行してください）")
+            out(session.t("browser_cli"))
             if open_browser is None:
                 open_browser = _open_browser(sys_)
             try:
                 if not open_browser(app.url()):
-                    out("ブラウザを開けませんでした。上の URL を開いてください。")
+                    out(session.t("browser_failed"))
             except Exception:
                 log.debug("webbrowser failed", exc_info=True)
             server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
-        out("\n中断しました。")
+        out(wiz.t("interrupted", session.lang))
     finally:
         stop.set()
         server.server_close()
         session.close()
         restore_signals()
     if session.started:
-        out(f"設定が終わりました。設定ファイル: {wiz._tilde(path)}")
+        out(session.t("finished", path=wiz._tilde(path)))
         return 0
-    out("設定は途中です。もう一度 `zundamon-jarvis setup` を実行すると、続きから設定できます。")
+    out(session.t("unfinished"))
     return 1
 
 
@@ -1097,9 +1175,9 @@ def _run_window(window: AppWindow, app: App, server: ThreadingHTTPServer,
     serving = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2},
                                name="setup-http", daemon=True)
     serving.start()
-    out("設定の画面を開きます（閉じると設定を終えます）。")
+    out(app.session.t("window_open"))
     try:
-        window.run(app.url())
+        window.run(app.url(), app.session.lang)
     except Exception:
         log.warning("the setup window could not be shown; using the browser", exc_info=True)
         server.shutdown()

@@ -73,3 +73,25 @@ def test_odd_input_never_raises(inp):
 
 def test_calendar_title_is_optional():
     assert tool_label(CAL + "create_event", {}) == "📅 Create event"
+
+
+@pytest.mark.parametrize("name, inp, label", [
+    ("Read", {"file_path": "/a/x.md"}, "📖 ファイルを読む: x.md"),
+    ("Glob", {"pattern": "*"}, "🔍 ファイルを探す"),
+    ("Bash", {"command": "ls", "description": "一覧"}, "⌨ コマンドを実行: 一覧"),
+    (CAL + "create_event", {"summary": "ジム"}, "📅 予定を作成: ジム"),
+    (CAL + "mystery_tool", {}, "📅 カレンダー: mystery_tool"),
+    ("FancyNewTool", {}, "🔧 FancyNewTool"),
+])
+def test_labels_in_japanese(name, inp, label):
+    assert tool_label(name, inp, "ja") == label
+
+
+def test_every_english_label_has_a_japanese_one():
+    from zundamon_jarvis import labels
+
+    used = {label for _, label in labels._FILE_TOOLS.values()} | {label for _, label in labels._PLAIN.values()}
+    used |= {display for _, _, display, _ in labels._MCP} | {label for *_, rules in labels._MCP for _, label, _ in rules}
+    used |= {"Web search", "Read page", "Start background task", "Ask subagent", "Run command", "Use skill"}
+    assert used <= set(labels.TEXT)
+    assert all(labels.TEXT[k]["en"] == k for k in labels.TEXT)

@@ -79,3 +79,15 @@ def test_service_start_stop_elsewhere_points_to_the_service_manager(monkeypatch,
     monkeypatch.setattr("zundamon_jarvis.platform.system", lambda: "linux")
     assert cli.main(["service", "stop"]) == 2
     assert "systemctl --user" in capsys.readouterr().err
+
+
+def test_models_download_speaks_the_display_language(monkeypatch, capsys):
+    from zundamon_jarvis import i18n
+
+    monkeypatch.setattr("zundamon_jarvis.stt.download_model", lambda: "/cache/m")
+    assert cli.main(["models", "download"]) == 0
+    assert "モデルの準備ができました: /cache/m" in capsys.readouterr().out
+    monkeypatch.setattr(i18n, "language", lambda config_path=None: "en")
+    assert cli.main(["models", "download"]) == 0
+    out = capsys.readouterr().out
+    assert "Downloading the speech-to-text model" in out and "The model is ready: /cache/m" in out

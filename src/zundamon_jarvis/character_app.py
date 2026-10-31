@@ -46,6 +46,7 @@ from zundamon_jarvis.character import (  # noqa: E402
     Line,
     Pose,
     Prefs,
+    bubble_note,
     clamp_margins,
     drag_target,
     is_click,
@@ -478,7 +479,7 @@ def build_window(app: Gtk.Application, forced_state: str | None = None) -> Gtk.W
         nonlocal prefs
         prefs = Prefs(right=prefs.right, bottom=prefs.bottom, bubble=not prefs.bubble)
         save_prefs(path, prefs)
-        bubble.note(f"Speech bubble: {'on' if prefs.bubble else 'off'}", time.monotonic())
+        bubble.note(bubble_note(prefs.bubble), time.monotonic())
 
     right_click.connect("released", on_right_click)
     area.add_controller(right_click)

@@ -10,8 +10,10 @@ first language. ``language()`` is the choice in ``config.toml`` (``language = "j
 unset, the OS's: Japanese when the OS is, English otherwise.
 """
 
+import functools
 import locale
 import os
+import string
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -66,8 +68,13 @@ def system_language(environ: Mapping[str, str] | None = None, platform_: str | N
     return "ja" if guess.lower().startswith(("ja", "japanese")) else "en"
 
 
+@functools.cache
+def _os_language() -> str:  # asked once per process: on macOS it runs `defaults`
+    return system_language()
+
+
 def resolve(configured: str | None) -> str:
-    return configured if configured in LANGUAGES else system_language()
+    return configured if configured in LANGUAGES else _os_language()
 
 
 def language(config_path: Path | None = None) -> str:
@@ -87,3 +94,20 @@ def text(table: Table, key: str, lang: str | None = None, **fields: object) -> s
     entry = table[key]
     s = entry.get(lang or language()) or entry[DEFAULT]
     return s.format(**fields) if fields else s
+
+
+def _fields(s: str) -> set[str]:
+    return {name for _, name, _, _ in string.Formatter().parse(s) if name}
+
+
+def problems(table: Table) -> list[str]:
+    """What is wrong with a table (for the tests): a key without both languages, or whose
+    languages do not take the same ``{fields}``."""
+    found = []
+    for key, entry in table.items():
+        missing = [lang for lang in LANGUAGES if not entry.get(lang)]
+        if missing:
+            found.append(f"{key}: no {'/'.join(missing)}")
+        elif len({frozenset(_fields(entry[lang])) for lang in LANGUAGES}) > 1:
+            found.append(f"{key}: fields differ: " + ", ".join(f"{lang}={sorted(_fields(entry[lang]))}" for lang in LANGUAGES))
+    return found

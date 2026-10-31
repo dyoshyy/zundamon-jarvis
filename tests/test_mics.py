@@ -65,13 +65,15 @@ def test_mic_value_round_trips():
 
 def test_choices_put_the_os_default_first_and_keep_an_unplugged_current():
     assert [d for d, _ in mics.mic_choices(SOURCES, None)] == [None, "alsa_input.cam", "bluez_input.AA"]
-    ch = mics.mic_choices(SOURCES, "gone")
+    ch = mics.mic_choices(SOURCES, "gone", "en")
     assert ch[-1] == ("gone", "gone (not found)")
-    assert mics.mic_choices([], 2) == [(None, mics.DEFAULT_LABEL), (2, "Device #2")]
+    assert mics.mic_choices([], 2, "en") == [(None, mics.DEFAULT_LABEL), (2, "Device #2")]
+    assert mics.mic_choices([], 2, "ja") == [(None, "システムの既定"), (2, "デバイス #2")]
+    assert mics.mic_choices(SOURCES, "gone")[-1] == ("gone", "gone（見つかりません）")  # tests: Japanese
 
 
 def test_mic_label_and_cycle():
-    assert mics.mic_label(SOURCES, None) == "System default"
+    assert mics.mic_label(SOURCES, None, lang="en") == "System default"
     assert mics.mic_label(SOURCES, "alsa_input.cam") == "Webcam"
     assert mics.cycle_mic(SOURCES, None, +1) == "alsa_input.cam"
     assert mics.cycle_mic(SOURCES, None, -1) == "bluez_input.AA"  # wraps
@@ -96,9 +98,10 @@ def test_default_source_name_asks_pactl_and_survives_its_absence():
 
 
 def test_default_choice_shows_the_resolved_source_name():
-    assert mics.mic_label(SOURCES, None, default_name="alsa_input.cam") == "System default (Webcam)"
-    assert mics.mic_label(SOURCES, None, default_name="unlisted") == "System default (unlisted)"
-    assert mics.mic_label(SOURCES, None) == "System default"
+    assert mics.mic_label(SOURCES, None, default_name="alsa_input.cam", lang="en") == "System default (Webcam)"
+    assert mics.mic_label(SOURCES, None, default_name="unlisted", lang="en") == "System default (unlisted)"
+    assert mics.mic_label(SOURCES, None, lang="en") == "System default"
+    assert mics.mic_label(SOURCES, None, default_name="alsa_input.cam", lang="ja") == "システムの既定（Webcam）"
     assert mics.mic_label(SOURCES, "alsa_input.cam", default_name="alsa_input.cam") == "Webcam"
 
 
@@ -274,7 +277,7 @@ def test_windows_default_input_is_read_from_wasapi_and_named_as_in_mme():
     assert mics.default_source_name(no_pactl, system="windows", **win(default_in=11)) == \
         "Microphone (Realtek(R) Audio)"
     sources = mics.list_sources(system="windows", **win())
-    assert mics.mic_label(sources, None, HYPERX_MIC_MME) == f"System default ({HYPERX_MIC})"
+    assert mics.mic_label(sources, None, HYPERX_MIC_MME, "en") == f"System default ({HYPERX_MIC})"
 
 
 def test_windows_default_input_without_wasapi_uses_directsound_and_skips_its_alias():
